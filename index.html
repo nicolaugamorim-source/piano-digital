@@ -158,6 +158,7 @@ video#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none
     <div id="pairQR" style="margin:12px 0 6px"></div>
     <div class="code" id="pairCode">–</div>
     <div class="small" id="pairStatus" style="margin-top:8px"></div>
+    <div id="pairDbg" style="margin-top:8px;font:11px/1.4 ui-monospace,Consolas,monospace;color:var(--muted);word-break:break-word"></div>
   </div>
   <canvas id="pip" width="320" height="180"></canvas>
   <div id="debugBox" class="glass"><canvas id="graph"></canvas></div>
@@ -285,6 +286,7 @@ video#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none
     <div class="small muted" style="margin-top:6px">Código que aparece no portátil</div>
     <input id="teleCode" inputmode="numeric" maxlength="5" aria-label="Código do portátil">
     <button class="btn primary" id="teleGo" style="width:100%">Ligar câmara e emparelhar</button>
+    <div id="teleDbg" style="margin-top:8px;font:11px/1.4 ui-monospace,Consolas,monospace;color:var(--muted);word-break:break-word">v13</div>
     <div class="small" id="teleMsg" style="margin-top:10px;color:var(--muted)">Depois de ligar, deita o telemóvel de lado na mesa, à frente das mãos, com o ecrã virado para ti.</div>
   </div>
 </div>
@@ -891,6 +893,24 @@ const ICE = { iceServers: [
   { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username:'peerjs', credential:'peerjsp' },
   { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'], username:'openrelayproject', credential:'openrelayproject' }
 ] };
+const APP_VER = 'v13';
+// Diagnóstico da ligação WebRTC: estado e tipos de endereços (host = rede local, srflx = internet, relay = retransmissão).
+function watchPc(pc, label, out){
+  if (!pc) return;
+  const tick = async () => {
+    if (pc.connectionState === 'closed') return;
+    let lc = {}, rc = {}, pair = '—';
+    try {
+      const st = await pc.getStats(), byId = {};
+      st.forEach(r => { byId[r.id] = r; if (r.type === 'local-candidate') lc[r.candidateType] = (lc[r.candidateType]||0) + 1; if (r.type === 'remote-candidate') rc[r.candidateType] = (rc[r.candidateType]||0) + 1; });
+      st.forEach(r => { if (r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated || r.selected)){ const a = byId[r.localCandidateId], b = byId[r.remoteCandidateId]; pair = (a ? a.candidateType : '?') + '↔' + (b ? b.candidateType : '?'); } });
+    } catch(e){}
+    const f = o => ['host','srflx','prflx','relay'].filter(k => o[k]).map(k => k + o[k]).join(' ') || '0';
+    out(`${label}: ${pc.iceConnectionState} · meus ${f(lc)} · dele ${f(rc)} · par ${pair}`);
+    setTimeout(tick, 1000);
+  };
+  tick();
+}
 const NET_TIP = 'A rede está a bloquear a ligação entre os dois aparelhos (comum em redes de universidade/residência). Liga o portátil ao hotspot do telemóvel, ou os dois ao mesmo Wi-Fi de casa, e tenta outra vez.';
 const TELE_FOV = 72;      // campo de visão horizontal típico de uma câmara de selfie (graus)
 function duoStart(){
@@ -900,7 +920,7 @@ function duoStart(){
   peer.on('open', renderPair);
   peer.on('error', e => { if (e.type === 'unavailable-id'){ store.duoCode = null; duo.peer = null; try { peer.destroy(); } catch(_){} duoStart(); } else { $('pairStatus').textContent = 'Erro de ligação: ' + e.type; } });
   peer.on('disconnected', () => { try { peer.reconnect(); } catch(_){} });
-  peer.on('connection', cn => { duo.conn = cn; cn.on('close', () => { if (duo.conn === cn) duo.conn = null; renderPair(); }); cn.on('open', renderPair); });
+  peer.on('connection', cn => { duo.conn = cn; watchPc(cn.peerConnection, 'dados', t => { duo.dbgD = t; $('pairDbg').textContent = APP_VER + ' · ' + (duo.dbgV || '') + ' | ' + (duo.dbgD || ''); }); cn.on('close', () => { if (duo.conn === cn) duo.conn = null; renderPair(); }); cn.on('open', renderPair); });
   peer.on('call', call => {
     call.answer();
     duo.found = true; duo.fail = false; renderPair();
@@ -908,6 +928,7 @@ function duoStart(){
     call.on('stream', st => { duo.vid.srcObject = st; duo.vid.play().catch(()=>{}); duo.vid.onplaying = () => { duo.on = true; duo.fail = false; renderPair(); duoLoop(); banner('Telemóvel ligado. Clica em “Calibrar”.', 4000); }; });
     const pc = call.peerConnection;
     if (pc) pc.addEventListener('iceconnectionstatechange', () => { if (pc.iceConnectionState === 'failed'){ duo.fail = true; duo.found = false; renderPair(); } });
+    watchPc(pc, 'vídeo', t => { duo.dbgV = t; $('pairDbg').textContent = APP_VER + ' · ' + (duo.dbgV || '') + ' | ' + (duo.dbgD || ''); });
     clearTimeout(duo.to); duo.to = setTimeout(() => { if (!duo.on){ duo.fail = true; renderPair(); } }, 20000);
     call.on('close', () => { duo.on = false; duo.found = false; rzReleaseAll(); renderPair(); });
   });
@@ -917,7 +938,8 @@ function renderPair(){
   const show = duoOn() && !duo.on;
   $('pairBox').style.display = show ? 'block' : 'none'; $('pip').style.display = duoOn() && duo.on ? 'block' : 'none';
   if (!duoOn()) return;
-  const url = location.origin + location.pathname + '?tele=' + (duo.code || '');
+  const url = location.origin + location.pathname + '?tele=' + (duo.code || '') + '&v=' + APP_VER;
+  if (!$('pairDbg').textContent) $('pairDbg').textContent = APP_VER;
   $('pairCode').textContent = duo.code || '–';
   if (location.protocol === 'file:'){ $('pairHelp').innerHTML = 'Para usar o telemóvel, a app tem de ser aberta pelo endereço <b>https</b> onde está publicada (não como ficheiro).'; $('pairQR').innerHTML = ''; }
   else if (typeof qrcode !== 'undefined' && duo.code){ const q = qrcode(0, 'M'); q.addData(url); q.make(); $('pairQR').innerHTML = q.createSvgTag({ cellSize:4, margin:1, scalable:true }); }
@@ -1006,6 +1028,7 @@ function startTele(){
     peer.on('open', () => {
       msg('Portátil encontrado — a ligar o vídeo…');
       const call = peer.call(host, st), pc = call && call.peerConnection;
+      watchPc(pc, 'vídeo', t => { tele.dbgV = t; $('teleDbg').textContent = APP_VER + ' · ' + (tele.dbgV || '') + ' | ' + (tele.dbgD || ''); });
       if (pc) pc.addEventListener('iceconnectionstatechange', () => {
         const q = pc.iceConnectionState;
         if (q === 'connected' || q === 'completed') ok();
@@ -1013,6 +1036,7 @@ function startTele(){
         else if (q === 'disconnected') lost('Ligação interrompida. Carrega outra vez em “Ligar”.');
       });
       const cn = peer.connect(host);
+      setTimeout(() => watchPc(cn.peerConnection, 'dados', t => { tele.dbgD = t; $('teleDbg').textContent = APP_VER + ' · ' + (tele.dbgV || '') + ' | ' + (tele.dbgD || ''); }), 300);
       cn.on('open', ok);
       cn.on('data', d => { tele.st = d; tele.t = performance.now(); });
       setTimeout(() => { if (!done) msg(NET_TIP, 'var(--warn)'); }, 20000);
