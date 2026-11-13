@@ -1,0 +1,2037 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<title>Piano Digital</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.28/build/Midi.js"></script>
+<!-- Ligação portátil ↔ telemóvel (WebRTC ponto a ponto) e código QR -->
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<style>
+:root{
+  --bg:#030908; --aq:#15a093; --aq-hi:#2cc7b8; --aq-dim:rgba(21,160,147,.35); --glow:rgba(21,160,147,.55);
+  --glass:rgba(4,16,15,.84); --text:#d8efec; --muted:#86aaa5; --bad:#ff7a6b; --warn:#ffb84d;
+  --nw:21;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:13px/1.5 Inter,system-ui,-apple-system,Segoe UI,sans-serif;
+  display:grid;grid-template-rows:56px 1fr auto;overflow:hidden}
+/* Barra de topo */
+header{display:flex;align-items:center;gap:6px;padding:0 16px;border-bottom:1px solid var(--aq-dim);background:#041110;box-shadow:0 0 24px rgba(21,160,147,.12);z-index:20}
+.brand{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;letter-spacing:.2px;margin-right:18px;color:#eafaf7;text-shadow:0 0 14px var(--glow)}
+.nav{background:none;border:1px solid transparent;color:var(--muted);font:inherit;font-weight:600;padding:8px 14px;border-radius:10px;cursor:pointer;min-height:40px}
+.nav:hover{color:var(--text)}
+.nav.on{color:#eafaf7;border-color:var(--aq);box-shadow:0 0 14px var(--glow), inset 0 0 10px rgba(21,160,147,.18)}
+.spacer{flex:1}
+button{font:inherit}
+.btn{background:rgba(21,160,147,.08);color:var(--text);border:1px solid var(--aq-dim);border-radius:10px;padding:8px 14px;font-weight:600;cursor:pointer;min-height:38px}
+.btn:hover{border-color:var(--aq);box-shadow:0 0 12px var(--glow)}
+.btn.primary{background:var(--aq);border-color:var(--aq);color:#021110;box-shadow:0 0 18px var(--glow)}
+.btn.primary:hover{background:var(--aq-hi)}
+.btn.on{border-color:var(--aq-hi);color:var(--aq-hi);box-shadow:0 0 12px var(--glow)}
+.btn:disabled{opacity:.4;cursor:default;box-shadow:none}
+/* Palco */
+#stage{position:relative;min-height:0;display:flex;align-items:center;justify-content:center;background:#010504;overflow:hidden}
+#view{max-width:100%;max-height:100%;display:block;touch-action:none}
+#view.adjust{cursor:grab}
+#stageMsg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center;padding:24px;pointer-events:none;font-size:15px}
+.glass{background:var(--glass);border:1px solid var(--aq-dim);border-radius:14px;box-shadow:0 0 26px rgba(21,160,147,.18);backdrop-filter:blur(8px)}
+#nowNote{position:absolute;left:16px;top:16px;padding:10px 16px;min-width:210px;pointer-events:none}
+#nowNote .note{font-size:36px;font-weight:700;line-height:1.05;color:var(--aq-hi);text-shadow:0 0 18px var(--glow)}
+#nowNote .who{color:var(--muted);font-size:12px}
+#songCard{position:absolute;right:16px;top:16px;padding:12px 14px;width:290px;display:none}
+#songCard .ttl{font-weight:700;font-size:14px;color:#eafaf7;margin-bottom:8px;padding-right:26px}
+#scClose{position:absolute;right:8px;top:6px;background:none;border:0;color:var(--muted);font-size:20px;cursor:pointer;min-width:32px;min-height:32px}
+.seg{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--aq-dim);border-radius:10px;overflow:hidden;margin-bottom:8px}
+.seg button{background:none;border:0;color:var(--muted);padding:8px 6px;font-weight:600;cursor:pointer;min-height:36px}
+.seg button.on{background:var(--aq);color:#021110}
+#feedback{position:absolute;left:50%;top:16px;transform:translateX(-50%);padding:8px 14px;display:none;font-weight:600;white-space:nowrap}
+#banner{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);padding:14px 22px;display:none;font-size:18px;font-weight:600;text-align:center;max-width:78%;color:#eafaf7}
+#debugBox{position:absolute;left:16px;bottom:16px;width:440px;height:230px;display:none;overflow:hidden;z-index:6}
+#debugBox canvas{width:100%;height:100%;display:block}
+#fallWrap{position:absolute;left:0;right:0;bottom:0;height:40%;display:none;pointer-events:none;z-index:4}
+#fall{width:100%;height:100%;display:block}
+/* Teclado no ecrã: só contornos com brilho */
+#piano{height:128px;position:relative;user-select:none;background:#020b0a;border-top:1px solid var(--aq);box-shadow:0 -6px 26px rgba(21,160,147,.25)}
+.key{position:absolute;top:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding-bottom:6px;cursor:pointer;white-space:nowrap}
+.key.white{height:100%;border:1px solid var(--aq);border-top:0;border-radius:0 0 6px 6px;color:var(--muted);z-index:1;background:rgba(21,160,147,.03);box-shadow:inset 0 0 8px rgba(21,160,147,.22);font-size:clamp(7px,calc(100vw / var(--nw) / 4.4),11px)}
+.key.black{height:60%;border:1px solid var(--aq);border-top:0;border-radius:0 0 5px 5px;color:var(--muted);z-index:2;background:#03100f;box-shadow:0 0 10px rgba(21,160,147,.45);font-size:clamp(6px,calc(100vw / var(--nw) / 7.2),9px)}
+.key.on{background:var(--aq)!important;color:#021110;box-shadow:0 0 22px var(--aq-hi)}
+.key.expected{border-color:#eafaf7;box-shadow:0 0 16px #eafaf7, inset 0 0 12px rgba(234,250,247,.45)}
+.fdot{position:absolute;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;z-index:3;pointer-events:none;display:none;border:2px solid #021110;opacity:.85}
+.fdot.on{width:20px;height:20px;margin:-10px 0 0 -10px;opacity:1;box-shadow:0 0 14px #eafaf7;border-color:#eafaf7}
+.key .badge{font-weight:700;font-size:10px;min-height:14px;border-radius:7px;padding:0 4px;color:#021110}
+/* Popups de definições */
+.pop{position:fixed;top:66px;left:16px;width:360px;max-height:calc(100vh - 90px);overflow:auto;padding:16px 16px 18px;display:none;z-index:30}
+.pop.on{display:block}
+.pop h2{margin:0 0 10px;font-size:15px;color:#eafaf7;text-shadow:0 0 12px var(--glow)}
+.pop h3{font-size:11px;text-transform:uppercase;letter-spacing:.9px;color:var(--aq-hi);margin:16px 0 6px;font-weight:600}
+.pop .x{position:absolute;right:10px;top:8px;background:none;border:0;color:var(--muted);font-size:22px;cursor:pointer;min-width:36px;min-height:36px}
+.row{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap}
+.row>label{flex:1}
+.col{display:flex;flex-direction:column;gap:8px;margin:8px 0}
+.muted{color:var(--muted)} .small{font-size:12px}
+select,input[type=file]{background:#020b0a;color:var(--text);border:1px solid var(--aq-dim);border-radius:10px;padding:8px;font:inherit;max-width:100%;min-height:38px;flex:1}
+input[type=range]{width:100%;accent-color:var(--aq)}
+input[type=checkbox]{accent-color:var(--aq);width:16px;height:16px;vertical-align:-3px}
+.slider{display:block;margin:10px 0}
+.slider .top{display:flex;justify-content:space-between}
+.slider .val{font-variant-numeric:tabular-nums;color:var(--aq-hi);font-weight:600}
+.info{background:rgba(21,160,147,.07);border:1px solid var(--aq-dim);border-radius:10px;padding:10px 12px;color:var(--muted);font-size:12px;margin:8px 0}
+#log{font-size:12px;max-height:150px;overflow:auto;font-variant-numeric:tabular-nums}
+#log div{padding:3px 0;border-bottom:1px solid rgba(21,160,147,.14)}
+/* Assistente */
+#wizard{position:fixed;inset:0;background:rgba(0,6,5,.7);display:none;align-items:center;justify-content:center;z-index:50}
+#wizard .box{width:min(560px,92vw);padding:22px 24px}
+#wizard h2{margin:0 0 2px;font-size:20px;color:#eafaf7;text-shadow:0 0 14px var(--glow)}
+#wizard .steps{display:flex;gap:6px;margin:12px 0 16px}
+#wizard .steps div{flex:1;height:4px;border-radius:2px;background:rgba(21,160,147,.2)}
+#wizard .steps div.done{background:var(--aq)}
+#wizard .steps div.cur{background:var(--aq-hi);box-shadow:0 0 10px var(--aq-hi)}
+#wizard .body{min-height:150px;font-size:14px}
+#wizard .foot{display:flex;justify-content:space-between;margin-top:16px}
+body.light #stage{background:#fff}
+body.light #view{max-width:62%;max-height:62%;border-radius:10px}
+body.light #piano{background:#fff}
+#pairBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:18px 22px;display:none;text-align:center;z-index:9;max-width:440px}
+#pairBox .code{font-size:34px;font-weight:700;letter-spacing:6px;color:var(--aq-hi);text-shadow:0 0 16px var(--glow)}
+#pairQR svg{background:#fff;border-radius:8px;padding:6px;width:170px;height:170px}
+#pip{position:absolute;left:16px;bottom:16px;width:300px;border-radius:10px;border:1px solid var(--aq-dim);display:none;z-index:5;box-shadow:0 0 18px rgba(21,160,147,.25)}
+/* ecrã do telemóvel */
+body.tele{display:block}
+body.tele header, body.tele main, body.tele #piano, body.tele .pop, body.tele #wizard{display:none!important}
+#teleUI{position:fixed;inset:0;background:var(--bg);display:none}
+#teleCv{position:absolute;inset:0;width:100%;height:100%;display:block}
+#teleStart{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:20px 22px;text-align:center;width:min(92vw,380px);z-index:3}
+#teleStart input{font:inherit;font-size:28px;letter-spacing:8px;text-align:center;width:100%;padding:10px;margin:10px 0;background:#020b0a;color:var(--text);border:1px solid var(--aq-dim);border-radius:10px}
+#teleVid{position:absolute;right:8px;top:8px;width:110px;border-radius:8px;opacity:.8;z-index:2;border:1px solid var(--aq-dim)}
+video#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="28" height="22" viewBox="0 0 28 22" fill="none" stroke="#2cc7b8" stroke-width="1.5" aria-hidden="true"><rect x="1" y="1" width="26" height="20" rx="3"/><path d="M7.5 1v20M14 1v20M20.5 1v20"/><path d="M5.6 1h3.8v11H5.6zM12.1 1h3.8v11h-3.8zM18.6 1h3.8v11h-3.8z" fill="#2cc7b8" stroke="none"/></svg>
+    Piano Digital
+  </div>
+  <button class="nav" data-pop="cam">Câmara</button>
+  <button class="nav" data-pop="piano">Mesa e piano</button>
+  <button class="nav" data-pop="touch">Deteção</button>
+  <button class="nav" data-pop="practice">Prática</button>
+  <span class="spacer"></span>
+  <div class="seg" id="engSeg" style="margin:0;min-width:430px;grid-template-columns:1fr 1fr 1.2fr"><button data-eng="top">Portátil aberto</button><button data-eng="rz">Portátil dobrado</button><button data-eng="duo">Portátil + telemóvel</button></div>
+  <button class="btn" id="btnWizard">Assistente</button>
+  <button class="btn primary" id="btnMain">Ativar câmara</button>
+</header>
+
+<main id="stage">
+  <canvas id="view" width="1280" height="720"></canvas>
+  <div id="stageMsg">Clica em “Ativar câmara” para começar.</div>
+  <div id="nowNote" class="glass"><div class="note" id="ltNote">–</div><div class="who" id="ltWho">Nenhum toque ainda</div></div>
+  <div id="songCard" class="glass">
+    <button id="scClose" aria-label="Fechar música">×</button>
+    <div class="ttl" id="scTitle"></div>
+    <div class="seg"><button id="modeFree">Livre</button><button id="modeWait">Esperar</button></div>
+    <div class="row" style="margin:0 0 6px"><button class="btn primary" id="scPlay">Iniciar</button><button class="btn" id="scRestart">Recomeçar</button></div>
+    <div class="small muted" id="scMode"></div>
+    <div class="small" id="scStats"></div>
+  </div>
+  <div id="feedback" class="glass"></div>
+  <div id="banner" class="glass"></div>
+  <div id="askSide" class="glass" style="position:absolute;left:50%;top:14px;transform:translateX(-50%);padding:14px 18px;display:none;text-align:center;z-index:8;max-width:560px">
+    <div style="font-weight:600;font-size:15px;margin-bottom:10px">Confirma os lados: mexe a mão DIREITA sobre a mesa. Os pontos aparecem do lado DIREITO do teclado de baixo?</div>
+    <button class="btn primary" id="sideYes">Sim, está certo</button> <button class="btn" id="sideNo">Não — inverter</button>
+  </div>
+  <div id="rzSlide" class="glass" style="position:absolute;right:14px;top:58%;transform:translateY(-50%);padding:10px 8px;display:none;z-index:7;text-align:center">
+    <div class="small muted">Piano ▲</div>
+    <input type="range" id="rzY" min="-90" max="90" step="0.5" value="0" aria-label="Altura do piano" style="writing-mode:vertical-lr;direction:rtl;width:30px;height:230px">
+    <div class="small muted">▼</div>
+  </div>
+  <div id="pairBox" class="glass">
+    <div style="font-weight:700;font-size:16px;margin-bottom:6px">Ligar o telemóvel</div>
+    <div class="small muted" id="pairHelp">Abre este código QR com a câmara do telemóvel (ou abre o mesmo link e escreve o código).</div>
+    <div id="pairQR" style="margin:12px 0 6px"></div>
+    <div class="code" id="pairCode">–</div>
+    <div class="small" id="pairStatus" style="margin-top:8px"></div>
+  </div>
+  <canvas id="pip" width="320" height="180"></canvas>
+  <div id="debugBox" class="glass"><canvas id="graph"></canvas></div>
+  <div id="fallWrap"><canvas id="fall"></canvas></div>
+</main>
+
+<div id="piano"></div>
+
+<!-- Popups -->
+<section class="pop glass" id="pop-cam">
+  <button class="x" aria-label="Fechar">×</button>
+  <h2>Câmara</h2>
+  <div class="row"><select id="devSel"><option value="">Câmara predefinida</option></select></div>
+  <div class="row"><select id="engSel">
+    <option value="top">Portátil aberto: câmara por cima das mãos (reconhece cada dedo)</option>
+    <option value="rz">Portátil dobrado: câmara ao nível da mesa</option>
+    <option value="duo">Portátil + telemóvel: o telemóvel vê o toque, o portátil reconhece os dedos</option>
+  </select></div>
+  <div class="row"><select id="viewSel">
+    <option value="mirror">Vista: espelho</option>
+    <option value="raw">Vista: direta</option>
+    <option value="player">Vista: do pianista (rodada 180°)</option>
+  </select></div>
+  <div id="camSliders"></div>
+  <div class="row"><label><input type="checkbox" id="chkSwap"> Trocar mão esquerda/direita</label></div>
+  <div class="info">Melhor posição: câmara à tua frente, o mais baixa possível <b>desde que o esqueleto das mãos continue a aparecer</b> (normalmente 15–30° acima da mesa). Ao nível da mesa as mãos deixam de ser reconhecidas. Não precisas de ver bem o piano na câmara: os pontos coloridos no teclado de baixo mostram onde está cada dedo. Com pouca luz a webcam baixa os FPS — acende uma luz sobre a mesa.</div>
+  <div class="small muted" id="camInfo"></div>
+  <h3>Modo rasante</h3>
+  <div class="info">A câmara fica pousada na mesa, à frente das mãos. A nota toca assim que o dedo cruza a linha de cima do piano (ajusta a altura dessa linha com a barra à direita da câmara) e para quando o dedo volta a subir. Não sabe qual dedo é qual. Precisa de luz <b>à frente</b> das mãos (a parte de baixo dos dedos não pode ficar em sombra).</div>
+  <div class="row"><label><input type="checkbox" id="chkRzStrike"> Exigir batida (dedos que descem devagar não tocam)</label></div>
+  <div class="row"><select id="showSel">
+    <option value="balls">Mostrar na câmara: só as bolas dos dedos</option>
+    <option value="keys">Mostrar na câmara: bolas + teclas na mesa</option>
+    <option value="all">Mostrar na câmara: bolas + teclas + linha da mesa</option>
+  </select></div>
+  <div class="row"><select id="blackSel">
+    <option value="depth">Teclas pretas: avançar o dedo (como num piano)</option>
+    <option value="lateral">Teclas pretas: entre as brancas (dedo em cima da risca)</option>
+    <option value="off">Sem teclas pretas</option>
+  </select></div>
+  <div id="rzSliders"></div>
+  <div class="row"><button class="btn" id="btnRzFlip">Inverter lados (graves ⇆ agudos)</button></div>
+  <div class="row"><button class="btn" id="btnLight">Luz do ecrã</button><span class="small muted">Põe o ecrã branco para iluminar os dedos.</span></div>
+  <h3>Imagens de teste</h3>
+  <div class="row"><button class="btn" id="btnShots">Capturar 6 imagens de teste</button></div>
+  <div class="small muted">Com a câmara na posição rasante, guarda numa só imagem 6 poses das mãos, para eu construir um detetor próprio para esse ângulo.</div>
+</section>
+
+<section class="pop glass" id="pop-piano">
+  <button class="x" aria-label="Fechar">×</button>
+  <h2>Mesa e piano</h2>
+  <div class="col"><button class="btn primary" id="btnCal">Calibrar tudo: mesa + toque (C)</button></div>
+  <div class="row"><button class="btn" id="btnTouchCal">Calibrar só o toque</button><button class="btn" id="btnTouchClear">Apagar toque</button></div>
+  <div class="small" id="calStatus"></div>
+  <div class="row"><label><input type="checkbox" id="chkLevel"> Câmara nivelada (pousada na mesa ou direita)</label></div>
+  <div class="info">Pousa as duas mãos abertas e espalmadas na mesa, dedos a apontar para a frente, onde queres o piano. A app mede a inclinação e a altura da câmara pela forma das mãos na imagem e desenha o piano em perspetiva, paralelo à câmara. Repete sempre que mexeres na câmara.</div>
+  <h3>Piano</h3>
+  <div class="row">
+    <select id="octSel"><option value="2">2 oitavas</option><option value="3">3 oitavas</option><option value="4">4 oitavas</option><option value="5">5 oitavas</option></select>
+    <select id="startSel"><option value="1">desde C1</option><option value="2">desde C2</option><option value="3">desde C3</option><option value="4">desde C4</option></select>
+  </div>
+  <div class="row"><select id="labelSel">
+    <option value="letters">Nomes: C, D, E… (C4, C#4)</option>
+    <option value="solfege">Nomes: Dó, Ré, Mi… (Dó4, Dó#4)</option>
+    <option value="none">Sem nomes nas teclas</option>
+  </select></div>
+  <div class="row"><label><input type="checkbox" id="chkFit"> Ajustar tamanho para caber na imagem</label></div>
+  <div id="pianoSliders"></div>
+  <div class="row"><button class="btn" id="btnAdjust">Mover piano (arrastar)</button><button class="btn" id="btnResetTweak">Repor ajustes</button></div>
+  <div class="row"><label><input type="checkbox" id="chkTable"> Mostrar piano na mesa</label></div>
+</section>
+
+<section class="pop glass" id="pop-touch">
+  <button class="x" aria-label="Fechar">×</button>
+  <h2>Deteção do toque</h2>
+  <div class="info">A calibração do toque aprende, para o teu ângulo de câmara, a diferença entre cada dedo <b>no ar</b> e <b>pousado</b> (usa as articulações todas do dedo, não só a ponta). O gráfico mostra essa medida: 20 = no ar, 0 = pousado. Dentro da <b>zona de toque</b> há nota; se deslizares o dedo pousado, a nota acompanha a tecla.</div>
+  <div class="row"><label><input type="checkbox" id="chkStrike"> Tocar só com batida (dedos pousados devagar ficam mudos)</label></div>
+  <div class="row"><label><input type="checkbox" id="chkMic"> Usar o microfone para confirmar toques (experimental)</label></div>
+  <div class="small muted">O som do dedo a bater na mesa confirma o contacto. Funciona melhor com auscultadores.</div>
+  <div id="touchSliders"></div>
+  <div class="row"><button class="btn" id="btnResetTouch">Repor valores</button></div>
+  <h3>Som</h3>
+  <div id="soundSliders"></div>
+  <h3>Diagnóstico</h3>
+  <div class="row"><label><input type="checkbox" id="chkDebug"> Mostrar alturas dos dedos (gráfico)</label></div>
+  <div class="row"><button class="btn" id="btnRec">Gravar 12 s para análise</button></div>
+  <div class="small muted">Guarda um ficheiro com os dados das mãos (sem imagem nem som) para afinar a deteção com dados reais.</div>
+  <div class="small muted" id="perf"></div>
+  <div id="log"></div>
+</section>
+
+<section class="pop glass" id="pop-practice">
+  <button class="x" aria-label="Fechar">×</button>
+  <h2>Prática</h2>
+  <h3>Para experimentar</h3>
+  <div class="col">
+    <button class="btn" id="exTest">Melodia de teste (arpejos)</button>
+    <button class="btn" id="exScale">Escala de Dó maior (1‑2‑3‑1‑2‑3‑4‑5)</button>
+    <button class="btn" id="exFive">5 dedos C‑D‑E‑F‑G</button>
+    <button class="btn" id="exChord">Acorde de Dó (dedos 1‑3‑5)</button>
+  </div>
+  <h3>A tua música (ficheiro MIDI)</h3>
+  <div class="row"><input type="file" id="midiFile" accept=".mid,.midi"></div>
+  <div class="small muted">Importa o .mid de qualquer música; as notas fora do teclado são transpostas por oitavas.</div>
+  <div id="practiceSliders"></div>
+</section>
+
+<div id="wizard"><div class="box glass">
+  <h2 id="wzTitle"></h2>
+  <div class="muted small" id="wzSub"></div>
+  <div class="steps" id="wzSteps"><div></div><div></div><div></div></div>
+  <div class="body" id="wzBody"></div>
+  <div class="foot"><button class="btn" id="wzPrev">Anterior</button><div style="display:flex;gap:8px"><button class="btn" id="wzClose">Fechar</button><button class="btn primary" id="wzNext">Seguinte</button></div></div>
+</div></div>
+
+<video id="video" playsinline muted autoplay></video>
+<video id="video2" playsinline muted autoplay style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
+
+<!-- Ecrã do telemóvel (abre-se com ?tele=CÓDIGO): câmara + piano -->
+<div id="teleUI">
+  <canvas id="teleCv"></canvas>
+  <video id="teleVid" playsinline muted autoplay></video>
+  <div id="teleStart" class="glass">
+    <div style="font-weight:700;font-size:18px;color:#eafaf7">Piano Digital · telemóvel</div>
+    <div class="small muted" style="margin-top:6px">Código que aparece no portátil</div>
+    <input id="teleCode" inputmode="numeric" maxlength="5" aria-label="Código do portátil">
+    <button class="btn primary" id="teleGo" style="width:100%">Ligar câmara e emparelhar</button>
+    <div class="small" id="teleMsg" style="margin-top:10px;color:var(--muted)">Depois de ligar, deita o telemóvel de lado na mesa, à frente das mãos, com o ecrã virado para ti.</div>
+  </div>
+</div>
+
+<script type="module">
+/* =====================================================================
+   PIANO DIGITAL — protótipo v3
+   Ideia: reconstruir a mão em 3D no referencial da câmara, estimar o plano
+   da mesa a partir das mãos pousadas e medir a ALTURA de cada ponta de dedo
+   acima desse plano. O piano é um retângulo nesse plano, projetado na imagem.
+
+   Secções:
+     0. Dependências            6. Mãos em 3D
+     1. Constantes              7. Detetor de toque   <-- iterar aqui
+     2. Definições              8. Som
+     3. Matemática (pura)       9. Teclado no ecrã
+     4. Mesa e piano (3D)      10. Prática
+     5. One Euro Filter        11. Desenho · 12. Câmara, UI, assistente
+   Limite: uma webcam não mede profundidade; tudo isto é estimativa.
+   ===================================================================== */
+
+// ---------- 0. Dependências ----------
+import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+const WASM_URL  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+// ---------- 1. Constantes ----------
+const $ = id => document.getElementById(id);
+const AQ = '#15a093', AQ_HI = '#2cc7b8';
+const FINGER_NAMES  = ['polegar','indicador','médio','anelar','mindinho'];
+const FINGER_COLORS = ['#ff7a6b','#ffb84d','#7be495','#6cb8ff','#c39bff'];
+const HAND_NAMES = { L:'Mão esquerda', R:'Mão direita' };
+const TIPS = [4,8,12,16,20], PALM = [0,5,9,13,17];
+function palmSize(W){ let q = 0, n = 0; for (let a = 0; a < 5; a++) for (let b = a+1; b < 5; b++){ const A = W[PALM[a]], B = W[PALM[b]]; q += Math.hypot(A[0]-B[0], A[1]-B[1], A[2]-B[2]); n++; } return q/n; }
+const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+// Altura aproximada (mm) de cada ponto acima da mesa com a mão espalmada (meia espessura da mão/dedo).
+const FLAT_OFF = [18, 16,13,9,6, 12,9,7,6, 12,9,7,6, 12,9,7,6, 12,9,7,6];
+const TIP_OFF = 6;   // centro da ponta do dedo fica ~6 mm acima da superfície quando toca
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const SOLFEGE    = ['Dó','Dó#','Ré','Ré#','Mi','Fá','Fá#','Sol','Sol#','Lá','Lá#','Si'];
+const midiName = m => NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
+const isBlack  = m => [1,3,6,8,10].includes(m % 12);
+const clamp = (x,a,b) => Math.max(a, Math.min(b, x));
+const mean = a => a.length ? a.reduce((s,x)=>s+x,0)/a.length : 0;
+
+// ---------- 2. Definições persistentes ----------
+const STORE_KEY = 'pianoDigital.v3';
+const DEFAULTS = {
+  sensitivity: 1.0,   // descida mínima = 8 mm ÷ sensibilidade
+  touchMm: 7,         // um dedo conta como pousado se estiver a menos disto do nível da mesa
+  isolation: 0.6,     // um dedo só toca se a sua descida ≥ isto × a do dedo que mais desceu na mesma mão
+  debounceMs: 90, confirmMs: 40, releaseMm: 4, restrikeMm: 3.5, smoothing: 0.35,
+  fov: 66,            // campo de visão horizontal da câmara (graus)
+  darken: 0.3, view: 'mirror', swapHands: false, levelCam: true,
+  octaves: 3, startOct: 3, labels: 'letters', autoFit: true, size: 1, showTable: true,
+  mode: 'wait', speed: 1, showDebug: false, useMic: false, engine: 'top', strikeOnly: true, strikeMm: 3, strikeSpeed: 35, rzTauMm: 2, rzKeyScale: 1.4, rzBlack: true, rzBlackMode: 'depth', rzBlackHalf: 5.5, rzStrike: false, rzShow2: 'keys', screenLight: false, volume: -6, deviceId: ''
+};
+function loadStore(){
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch(e){}
+  const out = { settings:{...DEFAULTS, ...(s.settings||{})}, cal:s.cal||null, tweak:{ rot:0, tilt:0, roll:0, offX:0, offY:0, ...(s.tweak||{}) }, touch:s.touch||null, _rzSolo:s._rzSolo||s.rz||null, _rzDuo:s._rzDuo||null, duoCode:s.duoCode||null, wizardDone:!!s.wizardDone, sver:3 };
+  if (s.sver !== 3) for (const k of ['sensitivity','touchMm','isolation','debounceMs','confirmMs','releaseMm','restrikeMm','smoothing']) out.settings[k] = DEFAULTS[k];   // novos valores por omissão do detetor
+  if (!s.settings){ // herdar algumas escolhas da versão anterior
+    try { const o = JSON.parse(localStorage.getItem('pianoSemPiano.v2') || '{}').settings || {};
+      for (const k of ['view','deviceId','volume','octaves','startOct']) if (o[k] !== undefined) out.settings[k] = o[k]; } catch(e){}
+  }
+  return out;
+}
+const store = loadStore();
+const S = store.settings;
+// Calibração do motor rasante: uma para o modo "portátil dobrado" e outra para a câmara do telemóvel (modo duo).
+Object.defineProperty(store, 'rz', { get(){ return S.engine === 'duo' ? store._rzDuo : store._rzSolo; }, set(v){ if (S.engine === 'duo') store._rzDuo = v; else store._rzSolo = v; }, enumerable:false });
+const TELE = new URLSearchParams(location.search).get('tele');     // não nulo = esta página é o ecrã do telemóvel
+function save(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){} }
+
+/*MATH-BEGIN*/
+// ---------- 3. Matemática (funções puras) ----------
+const V = {
+  add:(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]], sub:(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]], mul:(a,s)=>[a[0]*s,a[1]*s,a[2]*s],
+  dot:(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2], cross:(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],
+  norm:a=>{ const l=Math.hypot(a[0],a[1],a[2])||1; return [a[0]/l,a[1]/l,a[2]/l]; }
+};
+// Resolve A·x = b (Gauss com pivotagem parcial). Altera A e b.
+function solveLin(A, b){
+  const n = b.length;
+  for (let i = 0; i < n; i++){
+    let p = i; for (let r = i+1; r < n; r++) if (Math.abs(A[r][i]) > Math.abs(A[p][i])) p = r;
+    [A[i],A[p]] = [A[p],A[i]]; [b[i],b[p]] = [b[p],b[i]];
+    const d = A[i][i]; if (Math.abs(d) < 1e-12) return null;
+    for (let r = 0; r < n; r++){ if (r === i) continue; const f = A[r][i]/d; if (!f) continue; for (let c = i; c < n; c++) A[r][c] -= f*A[i][c]; b[r] -= f*b[i]; }
+  }
+  return b.map((v,i) => v / A[i][i]);
+}
+// Homografia 3×3 (h33 = 1) que leva 4 pontos src → dst.
+function homography(src, dst){
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++){
+    const [x,y] = src[i], [u,v] = dst[i];
+    A.push([x,y,1,0,0,0,-u*x,-u*y]); b.push(u);
+    A.push([0,0,0,x,y,1,-v*x,-v*y]); b.push(v);
+  }
+  const h = solveLin(A, b); return h ? [...h, 1] : null;
+}
+const applyH = (H, x, y) => { const w = H[6]*x + H[7]*y + H[8]; return [(H[0]*x + H[1]*y + H[2])/w, (H[3]*x + H[4]*y + H[5])/w]; };
+// Posição da mão na câmara: os pontos 3D do MediaPipe (W, mm, centrados na mão) + translação T
+// têm de projetar nos píxeis observados. Mínimos quadrados lineares em T.
+function solveT(px, W, f, cx, cy){
+  let s00=0, s02=0, s12=0, s22=0, b0=0, b1=0, b2=0; const n = px.length;
+  for (let i = 0; i < n; i++){
+    const a = px[i][0]-cx, b = px[i][1]-cy, c1 = a*W[i][2] - f*W[i][0], c2 = b*W[i][2] - f*W[i][1];
+    s00 += f*f; s02 -= f*a; s12 -= f*b; s22 += a*a + b*b;
+    b0 += f*c1; b1 += f*c2; b2 -= a*c1 + b*c2;
+  }
+  return solveLin([[s00,0,s02],[0,s00,s12],[s02,s12,s22]], [b0,b1,b2]);
+}
+// Plano da mesa a partir de mãos ESPALMADAS. Não usa a profundidade absoluta do MediaPipe (pouco fiável):
+// procura a orientação do plano (inclinação θ e rotação lateral ρ da câmara) e a distância d para as quais
+// os pontos da mão, retroprojetados sobre o plano, ficam com as distâncias reais entre si (medidas em W).
+// hs: [{ px:[[u,v]×21], W:[[x,y,z]×21] (mm) }], off: espessura (mm) de cada ponto acima da mesa.
+function fitTableHands(hs, f, cx, cy, allowRoll, off){
+  const H = hs.map(h => {
+    const r = h.px.map(p => [(p[0]-cx)/f, (p[1]-cy)/f, 1]), pairs = [];
+    for (let i = 0; i < 21; i++) for (let j = i+1; j < 21; j++){
+      const D = Math.hypot(h.W[i][0]-h.W[j][0], h.W[i][1]-h.W[j][1], h.W[i][2]-h.W[j][2]); if (D > 25) pairs.push([i,j,D]); }
+    return { r, pairs };
+  });
+  const normal = (th, ro) => [Math.cos(th)*Math.sin(ro), -Math.cos(th)*Math.cos(ro), -Math.sin(th)];
+  function evalN(n){
+    const da = [], dc = [], DD = []; let num = 0, den = 0;
+    for (const h of H){
+      const a = [], c = [];
+      for (let i = 0; i < 21; i++){ const nr = V.dot(n, h.r[i]); if (nr > -0.03) return null; a.push(V.mul(h.r[i], 1/nr)); c.push(V.mul(h.r[i], off[i]/nr)); }
+      for (const [i,j,D] of h.pairs){ const x = V.sub(a[i],a[j]); da.push(x); dc.push(V.sub(c[i],c[j])); DD.push(D); const l = Math.hypot(x[0],x[1],x[2]); num += l*D; den += l*l; }
+    }
+    const m0 = num/den;
+    const cost = m => { let q = 0; for (let k = 0; k < DD.length; k++){ const e = (Math.hypot(dc[k][0]-m*da[k][0], dc[k][1]-m*da[k][1], dc[k][2]-m*da[k][2]) - DD[k])/(DD[k]+20); q += e*e; } return q/DD.length; };
+    let lo = 0.6*m0, hi = 1.5*m0;
+    for (let k = 0; k < 22; k++){ const m1 = lo + (hi-lo)/3, m2 = hi - (hi-lo)/3; if (cost(m1) < cost(m2)) hi = m2; else lo = m1; }
+    const m = (lo+hi)/2; return { cost: cost(m), d: -m };
+  }
+  const R = Math.PI/180; let best = null;
+  const tryN = (th, ro) => { const n = normal(th*R, ro*R), e = evalN(n); if (e && (!best || e.cost < best.cost)) best = { cost:e.cost, d:e.d, n, theta:th, rho:ro }; };
+  for (let th = 4; th <= 89; th += 1) for (let ro = allowRoll ? -20 : 0; ro <= (allowRoll ? 20 : 0); ro += 2) tryN(th, ro);
+  if (!best) return null;
+  const t0 = best.theta, r0 = best.rho;
+  for (let th = t0-1; th <= t0+1.001; th += 0.1) for (let ro = allowRoll ? r0-2 : 0; ro <= (allowRoll ? r0+2.001 : 0); ro += 0.25) tryN(th, ro);
+  return { n:best.n, d:best.d, err:Math.sqrt(best.cost), theta:best.theta, rho:best.rho };
+}
+const project = (X, f, cx, cy) => [f*X[0]/X[2] + cx, f*X[1]/X[2] + cy];
+// Interseção do raio do píxel (u,v) com o plano n·X = d.
+function rayPlane(u, v, f, cx, cy, n, d){ const r = [(u-cx)/f, (v-cy)/f, 1], k = d / V.dot(n, r); return V.mul(r, k); }
+// Características da pose de um dedo, relativas à própria mão (não dependem de onde a mão está na imagem):
+//  [0..5] posição 2D das 3 articulações seguintes em relação à base do dedo, no referencial da palma, ÷ tamanho da palma;
+//  [6,7]  quanto a ponta e a articulação anterior estão "abaixo" da palma no modelo 3D; [8] flexão total; [9] altura relativa à palma.
+// P: px [21][2]; W: mm [21][3] ou null; hrel: (altura da ponta − altura da palma)/20 ou 0.
+function fingerFeats(P, W, hrel, f){
+  const j = f === 0 ? [1,2,3,4] : [4*f+1, 4*f+2, 4*f+3, 4*f+4];
+  let ex = [P[5][0]-P[17][0], P[5][1]-P[17][1]]; const el = Math.hypot(ex[0], ex[1]) || 1; ex = [ex[0]/el, ex[1]/el];
+  let ey = [-ex[1], ex[0]]; if ((P[9][0]-P[0][0])*ey[0] + (P[9][1]-P[0][1])*ey[1] < 0) ey = [-ey[0], -ey[1]];
+  let sc = 0, n = 0; const pm = [0,5,9,13,17];
+  for (let a = 0; a < 5; a++) for (let b = a+1; b < 5; b++){ sc += Math.hypot(P[pm[a]][0]-P[pm[b]][0], P[pm[a]][1]-P[pm[b]][1]); n++; }
+  sc = sc/n || 1;
+  const o = P[j[0]], x = [];
+  for (let k = 1; k <= 3; k++){ const dx = P[j[k]][0]-o[0], dy = P[j[k]][1]-o[1]; x.push((dx*ex[0]+dy*ex[1])/sc, (dx*ey[0]+dy*ey[1])/sc); }
+  if (W){
+    const nn = V.norm(V.cross(V.sub(W[5],W[0]), V.sub(W[17],W[0]))); let ps = 0;
+    for (let a = 0; a < 5; a++) for (let b = a+1; b < 5; b++) ps += Math.hypot(...V.sub(W[pm[a]], W[pm[b]]));
+    ps = ps/10 || 1;
+    const ang = (a,b,c) => { const u = V.norm(V.sub(b,a)), v = V.norm(V.sub(c,b)); return Math.acos(Math.max(-1, Math.min(1, V.dot(u,v)))); };
+    x.push(V.dot(V.sub(W[j[3]], W[j[0]]), nn)/ps, V.dot(V.sub(W[j[2]], W[j[0]]), nn)/ps, ang(W[j[0]],W[j[1]],W[j[2]]) + ang(W[j[1]],W[j[2]],W[j[3]]) + (f ? ang(W[0],W[j[0]],W[j[1]]) : 0));
+  } else x.push(0, 0, 0);
+  x.push(hrel || 0);
+  return x;
+}
+const FEAT_SIG_MIN = [0.012,0.012,0.012,0.012,0.012,0.012, 0.03,0.03, 0.06, 0.1];
+// Discriminante linear (covariância diagonal) entre "dedo no ar" e "dedo pousado": pontuação 0 = no ar, 1 = pousado.
+function trainFinger(upS, dnS){
+  const D = upS[0].length, mU = [], mD = [], w = []; let den = 0;
+  for (let i = 0; i < D; i++){
+    const u = upS.map(x => x[i]), d = dnS.map(x => x[i]), a = mean(u), b = mean(d);
+    const va = mean(u.map(x => (x-a)**2)), vb = mean(d.map(x => (x-b)**2)), sg = Math.max(Math.sqrt((va+vb)/2), FEAT_SIG_MIN[i]);
+    mU.push(a); mD.push(b); w.push((b-a)/(sg*sg)); den += (b-a)*(b-a)/(sg*sg);
+  }
+  return { up:mU, w, den: den || 1, sep: Math.sqrt(den) };
+}
+const fingerScore = (T, x) => { let q = 0; for (let i = 0; i < x.length; i++) q += T.w[i]*(x[i]-T.up[i]); return q/T.den; };
+/*MATH-END*/
+
+/*RZ-BEGIN*/
+// ---------- 3b. Motor "câmara rasante" (funções puras) ----------
+// Com a câmara ao nível da mesa, a altura de um dedo vê-se diretamente: é o espaço entre a parte de baixo da pele
+// e a linha onde os dedos tocam a mesa. Um dedo toca quando esse espaço fecha (como uma "cortina de luz" rente à mesa).
+// Pele: crominância avermelhada (Cr − Cb), que distingue a pele da mesa, da roupa e da parede mesmo com pouca luz.
+function rzSkin(rgba, n, thr, bg, out){
+  for (let i = 0, j = 0; i < n; i++, j += 4){
+    const R = rgba[j], G = rgba[j+1], B = rgba[j+2];
+    out[i] = (0.6687*R - 0.0874*G - 0.5813*B > thr && 0.299*R + 0.587*G + 0.114*B > 18 && !(bg && bg[i])) ? 1 : 0;
+  }
+  return out;
+}
+// Para cada coluna: a linha (y) do píxel de pele mais baixo, exigindo 3 píxeis de pele seguidos na vertical. −1 = sem pele.
+function rzLowest(m, W, H){
+  const yl = new Float32Array(W);
+  for (let x = 0; x < W; x++){
+    yl[x] = -1;
+    for (let y = H-1; y >= 2; y--) if (m[y*W+x] && m[(y-1)*W+x] && m[(y-2)*W+x]){ yl[x] = y; break; }
+  }
+  return yl;
+}
+function rzMedian5(a){
+  const o = new Float32Array(a.length), w = [0,0,0,0,0];
+  for (let i = 0; i < a.length; i++){ for (let k = 0; k < 5; k++) w[k] = a[Math.max(0, Math.min(a.length-1, i+k-2))]; w.sort((p,q) => p-q); o[i] = w[2]; }
+  return o;
+}
+// Reta y = a·x + b ajustada, de forma robusta, à parte de baixo dos dedos pousados.
+function rzFitLine(yl){
+  let xs = []; for (let x = 0; x < yl.length; x++) if (yl[x] >= 0) xs.push(x);
+  if (xs.length < 20) return null;
+  const sorted = xs.map(x => yl[x]).sort((p,q) => p-q), cut = sorted[Math.floor(sorted.length*0.3)];
+  xs = xs.filter(x => yl[x] >= cut);
+  let a = 0, b = 0;
+  for (let it = 0; it < 5; it++){
+    let sx = 0, sy = 0, sxx = 0, sxy = 0; const n = xs.length; if (n < 10) return null;
+    for (const x of xs){ sx += x; sy += yl[x]; sxx += x*x; sxy += x*yl[x]; }
+    a = (n*sxy - sx*sy)/(n*sxx - sx*sx || 1); b = (sy - a*sx)/n;
+    const res = xs.map(x => yl[x] - (a*x + b)), sd = Math.sqrt(mean(res.map(r => r*r)));
+    xs = xs.filter((x,i) => Math.abs(res[i]) < Math.max(2, 2*sd));
+  }
+  return { a, b };
+}
+// gap[x] = espaço (px) entre a mesa e a pele em cada coluna (999 = sem pele; negativo = abaixo da linha, i.e. mais perto da câmara).
+// Devolve os dedos pousados (touches) e as pontas no ar (hovers). prev = toques do fotograma anterior (histerese).
+function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
+  const tauAt = x => { for (const p of prev) if (Math.abs(p.x - x) < 0.6*wr) return tauOff; return tauOn; };
+  const touches = [], hovers = []; let x = 0;
+  while (x < W){
+    if (gap[x] <= tauAt(x)){
+      const x1 = x; while (x < W && gap[x] <= tauAt(x)) x++;
+      const w = x - x1;
+      if (w >= 0.35*wr && w <= 5.5*wr){
+        // pontas = máximos locais da profundidade abaixo da linha, afastados pelo menos 0,6 dedos e com relevo
+        const pk = [], sep = Math.max(3, Math.round(0.6*wr)), prom = Math.max(1.5, 0.15*wr);
+        for (let c = x1; c < x1 + w; c++){
+          const v = -gap[c]; let top = true, lmin = v, rmin = v;
+          for (let k = 1; k <= sep && top; k++){ const a = c-k >= x1 ? -gap[c-k] : -1e9, b = c+k < x1+w ? -gap[c+k] : -1e9; if (a > v || b >= v) top = false; if (a > -1e8) lmin = Math.min(lmin, a); if (b > -1e8) rmin = Math.min(rmin, b); }
+          if (top && (v - lmin >= prom || c - x1 < sep) && (v - rmin >= prom || x1 + w - 1 - c < sep)) pk.push({ x:c, pen:v });
+        }
+        if (pk.length >= 2 && pk.length <= 5){ for (const q of pk) touches.push({ x:q.x, w:Math.min(wr, w/pk.length), pen:q.pen }); continue; }
+        const n = Math.max(1, Math.min(3, Math.round(w/(1.1*wr))));
+        for (let k = 0; k < n; k++){
+          const c0 = Math.floor(x1 + w*k/n), c1 = Math.max(c0+1, Math.floor(x1 + w*(k+1)/n)), v = [];
+          for (let c = c0; c < c1; c++) v.push(-gap[c]); v.sort((p,q) => p-q);
+          touches.push({ x:(c0+c1)/2, w:w/n, pen:v[v.length>>1] });
+        }
+      }
+    } else x++;
+  }
+  // Pontas no ar: mínimos locais do espaço dedo–mesa (o ponto mais baixo de cada saliência da mão).
+  const r = Math.max(3, Math.round(0.4*wr));
+  for (x = r; x < W-r; x++){
+    const g = gap[x]; if (g > 90 || g <= tauOn) continue;
+    let ok = true; for (let k = 1; k <= r; k++) if (gap[x-k] < g || gap[x+k] <= g){ ok = false; break; }
+    if (ok && Math.min(gap[x-r], gap[x+r]) - g >= 2.5) hovers.push({ x, gap:g });
+  }
+  return { touches, hovers };
+}
+/*RZ-END*/
+
+// ---------- 4. Mesa e piano ----------
+// Medidas reais (mm): tecla branca 23,5 × 150; preta 13,7 × 95. Origem do teclado = canto de trás, lado dos graves.
+const KW = 23.5, KL = 150, BW = 13.7, BL = 95;
+let LOW = 48, HIGH = 83, KEYS = [], NWHITE = 21, PW = 21*KW;
+function setRange(){
+  LOW = 12*(S.startOct + 1); HIGH = LOW + 12*S.octaves - 1; NWHITE = 7*S.octaves; PW = NWHITE*KW;
+  KEYS = []; let wi = 0;
+  for (let m = LOW; m <= HIGH; m++){
+    if (!isBlack(m)){ KEYS.push({ midi:m, black:false, x0:wi*KW, x1:(wi+1)*KW, y0:0, y1:KL, wi }); wi++; }
+    else { const cx = wi*KW; KEYS.push({ midi:m, black:true, x0:cx-BW/2, x1:cx+BW/2, y0:0, y1:BL }); }
+  }
+  document.documentElement.style.setProperty('--nw', NWHITE);
+}
+function keyAtPlane(x, y){
+  if (x < -0.3*KW || x > PW + 0.3*KW || y < -0.12*KL || y > 1.3*KL) return null;
+  if (y <= BL) for (const k of KEYS) if (k.black && x >= k.x0 - 1 && x <= k.x1 + 1) return k;
+  const wi = clamp(Math.floor(x / KW), 0, NWHITE - 1);
+  return KEYS.find(k => !k.black && k.wi === wi) || null;
+}
+function noteLabel(m){
+  if (S.labels === 'none') return '';
+  return (S.labels === 'solfege' ? SOLFEGE : NOTE_NAMES)[m % 12] + (Math.floor(m / 12) - 1);
+}
+
+let vw = 1280, vh = 720;
+const cam = { f: 1000, cx: 640, cy: 360 };
+function updateCam(){ cam.f = (vw/2)/Math.tan(S.fov*Math.PI/360); cam.cx = vw/2; cam.cy = vh/2; }
+// piano = estado ativo: plano (n,d), eixos (u: graves→agudos, v: para trás das teclas), homografia teclado(mm)↔imagem(px).
+let piano = null;
+function computePiano(){
+  piano = null;
+  const c = store.cal;
+  if (!c || c.ver !== 2 || c.vw !== vw || c.vh !== vh || c.fov !== S.fov){ renderCalStatus(); return; }
+  const tw = store.tweak, rot = tw.rot*Math.PI/180, tilt = tw.tilt*Math.PI/180;
+  const u0 = V.cross(c.v, c.n);
+  const v1 = V.norm(V.add(V.mul(c.v, Math.cos(rot)), V.mul(u0, Math.sin(rot))));
+  const u1 = V.cross(v1, c.n), roll = (tw.roll||0)*Math.PI/180;
+  const n1 = V.norm(V.add(V.mul(c.n, Math.cos(roll)), V.mul(u1, Math.sin(roll))));      // nivelar: roda em torno de v
+  const u = V.norm(V.sub(V.mul(u1, Math.cos(roll)), V.mul(c.n, Math.sin(roll))));
+  const n = V.norm(V.add(V.mul(n1, Math.cos(tilt)), V.mul(v1, Math.sin(tilt))));          // inclinação: roda em torno de u
+  const v = V.norm(V.sub(V.mul(v1, Math.cos(tilt)), V.mul(n1, Math.sin(tilt))));
+  const d = V.dot(n, c.C);
+  const C = V.add(c.C, V.add(V.mul(u, tw.offX), V.mul(v, tw.offY)));
+  const cornersFor = s => {
+    const B0 = V.add(C, V.sub(V.mul(v, 0.77*KL*s), V.mul(u, PW*s/2)));
+    const B1 = V.add(B0, V.mul(u, PW*s)), F1 = V.sub(B1, V.mul(v, KL*s)), F0 = V.sub(B0, V.mul(v, KL*s));
+    return [B0, B1, F1, F0];
+  };
+  const m = 0.02*vw;
+  const fits = cs => cs.every(X => { if (X[2] < 50) return false; const p = project(X, cam.f, cam.cx, cam.cy); return p[0] > m && p[0] < vw-m && p[1] > m && p[1] < vh-m; });
+  let s = S.size;
+  if (S.autoFit) while (s > 0.3 && !fits(cornersFor(s))) s -= 0.02;
+  const cs = cornersFor(s);
+  if (cs.some(X => X[2] < 50)){ renderCalStatus('O piano fica atrás da câmara — recalibra a mesa.'); return; }
+  const img = cs.map(X => project(X, cam.f, cam.cx, cam.cy));
+  const src = [[0,0],[PW,0],[PW,KL],[0,KL]];
+  const H = homography(src, img), Hinv = homography(img, src);
+  if (!H || !Hinv){ renderCalStatus(); return; }
+  piano = { n, d, u, v, C, s, H, Hinv, B0: cs[0], fitsView: fits(cs) };
+  renderCalStatus();
+}
+function renderCalStatus(msg){
+  if (rzOn()){
+    const r = store.rz, ok = r && r.vw === rzSrc().videoWidth && r.vh === rzSrc().videoHeight;
+    $('calStatus').innerHTML = ok ? `<span style="color:var(--aq-hi)">Modo rasante calibrado.</span> Dedo ≈ ${Math.round(r.wr)} px · teclas pretas: ${rzBlackMode() === 'depth' ? 'dedo avançado (' + r.pb.toFixed(1) + ' px)' : rzBlackMode() === 'lateral' ? 'entre as brancas' : 'desligadas'}.` : '<span class="muted">Modo rasante por calibrar.</span>';
+    const b = $('btnMain'); if (!stream){ b.textContent = 'Ativar câmara'; b.className = 'btn primary'; } else { b.textContent = 'Calibrar'; b.className = ok ? 'btn' : 'btn primary'; }
+    $('rzSlide').style.display = ok ? 'block' : 'none'; if (ok){ if (r.b0 == null) r.b0 = r.b; $('rzY').value = r.b0 - r.b; }
+    return;
+  }
+  $('rzSlide').style.display = 'none';
+  const c = store.cal; let h;
+  if (msg) h = `<span style="color:var(--warn)">${msg}</span>`;
+  else if (!c) h = '<span class="muted">Mesa por calibrar.</span>';
+  else if (!piano) h = '<span style="color:var(--warn)">É preciso recalibrar a mesa (a câmara, o campo de visão ou a versão mudou).</span>';
+  else {
+    const ang = Math.round(c.theta), hgt = Math.round(-c.d/10);
+    h = `<span style="color:var(--aq-hi)">Mesa calibrada.</span> Câmara a ~${hgt} cm acima da mesa, a olhar ~${ang}° para baixo · erro do ajuste ${(c.err*100).toFixed(0)}% · piano a ${Math.round(piano.s*100)}% do tamanho real${piano.fitsView ? '' : ' (não cabe todo na imagem)'}.`;
+    if (ang > 65) h += ' <span style="color:var(--warn)">Câmara muito de cima: o toque fica menos fiável. Põe-na mais baixa, à tua frente.</span>';
+  }
+  if (duoOn()){ const r = store.rz; h += !duo.on ? ' <span style="color:var(--warn)">Telemóvel por ligar.</span>' : (r ? ` <span style="color:var(--aq-hi)">Telemóvel ligado e calibrado</span>${r.duo ? '' : ' (sem alinhamento com os dedos)'}.` : ' <span style="color:var(--warn)">Telemóvel ligado, por calibrar.</span>'); $('rzSlide').style.display = duo.on && r ? 'block' : 'none'; if (duo.on && r){ if (r.b0 == null) r.b0 = r.b; $('rzY').value = r.b0 - r.b; } }
+  else if (c && piano) h += store.touch ? ' <span style="color:var(--aq-hi)">Toque calibrado.</span>' : ' <span style="color:var(--warn)">Toque por calibrar.</span>';
+  $('calStatus').innerHTML = h;
+  const b = $('btnMain');
+  if (!stream){ b.textContent = 'Ativar câmara'; b.className = 'btn primary'; }
+  else { b.textContent = 'Calibrar'; b.className = piano && (duoOn() ? store.rz : store.touch) ? 'btn' : 'btn primary'; }
+}
+// Coordenadas no teclado (mm: a = ao longo das teclas desde os graves, b = desde a parte de trás) do píxel (x,y),
+// supondo que o ponto está "lift" mm acima da mesa. Com a câmara rasante, ignorar esta altura deslocaria muito o ponto.
+function tableCoords(x, y, lift){
+  if (!piano) return null;
+  const r = [(x-cam.cx)/cam.f, (y-cam.cy)/cam.f, 1], nr = V.dot(piano.n, r);
+  if (nr > -1e-3) return null;
+  const q = V.sub(V.mul(r, (piano.d + lift)/nr), piano.B0);
+  return [V.dot(q, piano.u)/piano.s, -V.dot(q, piano.v)/piano.s];
+}
+const keyFromImage = (x, y, lift = TIP_OFF) => { const c = tableCoords(x, y, lift); return c ? keyAtPlane(c[0], c[1]) : null; };
+
+// Calibração da mesa: 3 s de contagem + 1,5 s a recolher os pontos 3D das mãos espalmadas.
+const tcal = { timer:null, sampling:false, sumP:null, sumW:null, cnt:null };
+function startTableCal(){
+  if (!stream){ banner('Ativa a câmara primeiro.', 2500); return; }
+  if (tcal.timer || tcal.sampling) return;
+  closePops(); setAdjust(false);
+  let n = 3; const msg = () => banner(`Pousa as duas mãos abertas e espalmadas na mesa, dedos para a frente… ${n}`);
+  msg();
+  tcal.timer = setInterval(() => {
+    n--;
+    if (n > 0){ msg(); return; }
+    clearInterval(tcal.timer); tcal.timer = null;
+    tcal.sumP = { L:null, R:null }; tcal.sumW = { L:null, R:null }; tcal.cnt = { L:0, R:0 }; tcal.sampling = true;
+    banner('Não mexas as mãos…');
+    setTimeout(finishTableCal, 1500);
+  }, 1000);
+}
+function finishTableCal(){
+  tcal.sampling = false;
+  const data = [];
+  for (const id of ['L','R']){
+    const c = tcal.cnt[id]; if (c < 6) continue;
+    data.push({ id, px: tcal.sumP[id].map(p => [p[0]/c, p[1]/c]), W: tcal.sumW[id].map(p => V.mul(p, 1/c)) });
+  }
+  if (!data.length){ banner('Não consegui ver as mãos. Tenta outra vez, com as mãos bem visíveis.', 3500); renderWizard(); return; }
+  const fit = fitTableHands(data, cam.f, cam.cx, cam.cy, !S.levelCam, FLAT_OFF);
+  if (!fit){ banner('Não consegui ajustar a mesa. Põe as mãos mais abaixo na imagem e repete.', 3500); renderWizard(); return; }
+  const n = fit.n, d = fit.d;
+  // Pontos 3D de cada mão sobre a mesa (raio do píxel ∩ plano à altura do ponto).
+  let num = 0, sb = 0, sw = 0, C = [0,0,0], nt = 0, g = [0,0,0];
+  for (const h of data){
+    h.B = h.px.map((p,i) => { const r = [(p[0]-cam.cx)/cam.f, (p[1]-cam.cy)/cam.f, 1]; return V.mul(r, (d + FLAT_OFF[i])/V.dot(n, r)); });
+    h.mb = mean(h.B.map(b => b[2])); const mw = mean(h.W.map(w => w[2]));
+    h.B.forEach((b,i) => { const x = b[2]-h.mb, y = h.W[i][2]-mw; num += x*y; sb += x*x; sw += y*y; });
+    for (const i of [8,12,16,20]){ C = V.add(C, V.sub(h.B[i], V.mul(n, FLAT_OFF[i]))); nt++; }
+    g = V.add(g, V.sub(h.B[12], h.B[0]));
+  }
+  // Sinal do eixo z do MediaPipe, verificado contra a geometria (mão espalmada: o pulso e as pontas têm profundidades conhecidas).
+  const corr = num/Math.sqrt(sb*sw + 1e-9), zs = corr < -0.3 ? -1 : 1;
+  // Correção de profundidade por mão: profundidade real (plano) ÷ profundidade estimada a partir do tamanho da mão.
+  const kappa = {}, palm = {};
+  for (const h of data){
+    palm[h.id] = palmSize(h.W);
+    const Ws = h.W.map(w => [w[0], w[1], zs*w[2]]), T = solveT(h.px, Ws, cam.f, cam.cx, cam.cy);
+    kappa[h.id] = T && T[2] > 50 ? clamp(h.mb/(T[2] + mean(Ws.map(w => w[2]))), 0.6, 1.6) : 1;
+  }
+  if (data.length === 1){ const o = data[0].id === 'L' ? 'R' : 'L'; kappa[o] = kappa[data[0].id]; palm[o] = palm[data[0].id]; }
+  C = V.mul(C, 1/nt);
+  // Orientação do teclado: alinhado com a câmara (paralelo à imagem); o lado de trás é para onde apontam os dedos.
+  g = V.sub(g, V.mul(n, V.dot(n, g)));
+  let zp = V.sub([0,0,1], V.mul(n, n[2])), v;
+  const gl = Math.hypot(...g), zl = Math.hypot(...zp);
+  if (gl < 1){ banner('Não percebi a direção dos dedos. Aponta-os para a frente e repete.', 3500); return; }
+  const cosg = zl > 0.2 ? V.dot(g, zp)/(gl*zl) : 0;
+  v = Math.abs(cosg) >= 0.5 ? V.mul(V.norm(zp), Math.sign(cosg)) : V.norm(g);
+  store.cal = { ver:2, n, d, C, v, err:fit.err, theta:fit.theta, rho:fit.rho, zs, kappa, palm, vw, vh, fov:S.fov };
+  store.tweak = { rot:0, tilt:0, roll:0, offX:0, offY:0 };
+  Object.values(hands).forEach(h => { h.floor = 0; h.candT = -9; h.fingers.forEach(fs => { fs.hist = []; fs.state = 'up'; fs.h = null; }); });
+  save(); computePiano(); buildSliders();
+  banner(fit.err > 0.12 ? 'Mesa calibrada, mas com pouco rigor — repete com as mãos bem espalmadas e abertas.' : (duoOn() ? 'Mesa calibrada. A seguir: a câmara do telemóvel.' : 'Mesa calibrada. A seguir: calibrar o toque.'), 2000);
+  renderWizard();
+  if (piano) setTimeout(duoOn() ? startRzCal : startTouchCal, 2000);
+}
+// Calibração do toque: duas poses por mão — todos os dedos pousados e todos os dedos no ar.
+// Aprende, para ESTE ângulo de câmara, o que muda na imagem quando cada dedo toca (mesmo que a ponta quase não se mexa).
+const FNAMES = ['polegar','indicador','médio','anelar','mindinho'];
+const qcal = { busy:false, sampling:null, acc:null, timers:[] };
+function startTouchCal(){
+  if (!stream || !piano){ banner('Ativa a câmara e calibra a mesa primeiro.', 3000); return; }
+  if (qcal.busy || tcal.timer || tcal.sampling) return;
+  closePops(); setAdjust(false); qcal.busy = true; qcal.acc = { down:{}, up:{} }; qcal.timers = [];
+  const seq = (label, txt, t0) => {
+    for (let k = 0; k < 3; k++) qcal.timers.push(setTimeout(() => banner(`${txt}… ${3-k}`), t0 + k*1000));
+    qcal.timers.push(setTimeout(() => { qcal.sampling = label; banner('Não mexas…'); }, t0 + 3000));
+    qcal.timers.push(setTimeout(() => { qcal.sampling = null; }, t0 + 4500));
+  };
+  seq('down', 'Pousa as pontas de TODOS os dedos na mesa, em posição de tocar (pulsos no ar)', 0);
+  seq('up', 'Agora levanta só os dedos, sem mexer os pulsos (dedos no ar, como antes de tocar)', 4700);
+  qcal.timers.push(setTimeout(finishTouchCal, 9400));
+}
+function finishTouchCal(){
+  qcal.busy = false; qcal.sampling = null;
+  const out = {}, weak = [];
+  for (const id of ['L','R']){
+    const dn = qcal.acc.down[id], up = qcal.acc.up[id];
+    if (!dn || !up || dn[0].length < 6 || up[0].length < 6) continue;
+    out[id] = [0,1,2,3,4].map(f => trainFinger(up[f], dn[f]));
+    out[id].forEach((T, f) => { if (T.sep < 4) weak.push(`${FNAMES[f]} ${id === 'L' ? 'esq.' : 'dir.'}`); });
+  }
+  if (!Object.keys(out).length){ banner('Não consegui ver as mãos nas duas poses. Repete.', 3500); renderWizard(); return; }
+  store.touch = { ...(store.touch || {}), ...out }; save();
+  Object.values(hands).forEach(h => { h.floor = 0; h.candT = -9; h.fingers.forEach(fs => { fs.hist = []; fs.state = 'up'; fs.h = null; }); });
+  banner(weak.length ? `Toque calibrado, mas deste ângulo quase não se distingue: ${weak.join(', ')}. Baixa a câmara (mais rasante à mesa) e recalibra.` : 'Toque calibrado. Podes tocar.', weak.length ? 7000 : 3000);
+  renderCalStatus(); renderWizard();
+}
+let bannerTimer = null;
+function banner(msg, ms){ const el = $('banner'); el.textContent = msg; el.style.display = 'block'; clearTimeout(bannerTimer); if (ms) bannerTimer = setTimeout(() => el.style.display = 'none', ms); }
+
+// ---------- 4b. Motor rasante: estado, calibração e ciclo ----------
+const RZW = 640;
+const rz = { cv:document.createElement('canvas'), ctx:null, H:360, sc:0.5, bg:null, prev:[], prevGap:null, touches:[], hovers:[], active:new Map(), offT:new Map(), yTop:0, roiH:0, yl:null, calib:null, lastT:0, mp:false, tracks:[], hist:[], accC:null, accY:null, gapS:null };
+rz.ctx = rz.cv.getContext('2d', { willReadFrequently:true });
+const rzOn = () => S.engine === 'rz', duoOn = () => S.engine === 'duo';
+const rzSrc = () => duoOn() ? duo.vid : video;           // modo duo: a imagem rasante vem da câmara do telemóvel
+function rzSize(){ const v = rzSrc(); rz.sc = RZW/(v.videoWidth || 1280); rz.H = Math.round((v.videoHeight || 720)*rz.sc); }
+// teclado: posição lateral (px de processamento) ↔ mm no teclado; pen = px abaixo da linha (dedo mais perto da câmara)
+function rzGeom(){ const c = store.rz; return { keyPx: S.rzKeyScale*c.wr, zref: (RZW/2)/Math.tan(S.fov*Math.PI/360)*16/c.wr }; }
+const rzDepthOk = () => !!store.rz && store.rz.pb >= 1.2;
+const rzBlackMode = () => S.rzBlackMode === 'off' ? 'off' : (S.rzBlackMode === 'depth' && rzDepthOk() ? 'depth' : 'lateral');
+function rzToKey(x, pen){
+  const c = store.rz, g = rzGeom(), mode = rzBlackMode(), dfrac = rzDepthOk() ? clamp(pen/c.pb, -0.5, 2) : 0;
+  const xc = RZW/2 + (x - RZW/2)*(1 - 55*dfrac/g.zref);
+  const a = PW/2 + (c.flip ? -1 : 1)*(c.x0 - xc)*KW/g.keyPx;     // por omissão: a mão direita aparece à esquerda da imagem (câmara de frente)
+  if (mode === 'lateral'){
+    // Pretas só pela posição lateral: o dedo em cima da fronteira entre duas brancas onde existe uma preta (como num piano real).
+    const bk = KEYS.find(k => k.black && Math.abs(a - (k.x0 + k.x1)/2) <= S.rzBlackHalf);
+    return { a, black: !!bk, key: bk || keyAtPlane(a, KL*0.8) };
+  }
+  const black = mode === 'depth' && dfrac >= 0.5;
+  return { a, black, key: keyAtPlane(a, black ? BL*0.5 : KL*0.8) };
+}
+const rzKeyX = a => store.rz.x0 - (store.rz.flip ? -1 : 1)*(a - PW/2)*rzGeom().keyPx/KW;        // mm no teclado → px de processamento (na linha das brancas)
+function rzReleaseAll(){ for (const m of rz.active.keys()) noteOff(m); rz.active.clear(); rz.prev = []; rz.touches = []; rz.hovers = []; rz.tracks = []; rz.hist = []; rz.accC = null; rz.gapS = null; }
+function rzGrab(y0, h){ if (rz.cv.width !== RZW || rz.cv.height !== h){ rz.cv.width = RZW; rz.cv.height = h; } rz.ctx.filter = 'blur(1.2px)'; const v = rzSrc(); rz.ctx.drawImage(v, 0, y0/rz.sc, v.videoWidth, h/rz.sc, 0, 0, RZW, h); return rz.ctx.getImageData(0, 0, RZW, h).data; }
+function rzFrame(t){
+  const c = store.rz, dt = Math.max(1e-3, t - rz.lastT); rz.lastT = t;
+  if (rz.calib){ rzCalFrame(); return; }
+  if (!c) return;
+  const ya = c.b, yb = c.a*(RZW-1) + c.b;
+  const yTop = Math.max(0, Math.floor(Math.min(ya, yb) - 100)), yBot = Math.min(rz.H, Math.ceil(Math.max(ya, yb) + 24)), h = yBot - yTop;
+  if (h < 20) return;
+  const data = rzGrab(yTop, h), n = RZW*h, m = new Uint8Array(n), bg = rz.bg ? rz.bg.subarray(yTop*RZW, yBot*RZW) : null;
+  // Redução de ruído no tempo, por píxel: parado → média com os fotogramas anteriores; mudança a sério → segue logo (sem atraso).
+  const init = !rz.accC || rz.accC.length !== n;
+  if (init){ rz.accC = new Float32Array(n); rz.accY = new Float32Array(n); }
+  const aC = rz.accC, aY = rz.accY;
+  for (let i = 0, j = 0; i < n; i++, j += 4){
+    const R = data[j], G = data[j+1], B = data[j+2], cc = 0.6687*R - 0.0874*G - 0.5813*B, yy = 0.299*R + 0.587*G + 0.114*B;
+    if (init){ aC[i] = cc; aY[i] = yy; }
+    else { const k = (Math.abs(cc - aC[i]) > 10 || Math.abs(yy - aY[i]) > 25) ? 1 : 0.3; aC[i] += k*(cc - aC[i]); aY[i] += k*(yy - aY[i]); }
+    m[i] = (aC[i] > c.thr && aY[i] > 18 && !(bg && bg[i])) ? 1 : 0;
+  }
+  const yl = rzLowest(m, RZW, h), raw = new Float32Array(RZW);
+  // Precisão abaixo do píxel: interpola onde a cor de pele cruza o limiar entre o último píxel de pele e o seguinte.
+  for (let x = 0; x < RZW; x++){ const y = yl[x]; if (y >= 0 && y + 1 < h){ const cA = aC[y*RZW+x] - c.thr, cB = aC[(y+1)*RZW+x] - c.thr; if (cA > 0 && cB < 0) yl[x] = y + cA/(cA - cB); } }
+  // Sem mãos não há pontos: uma coluna só conta se tiver pele suficiente na vertical (um dedo, não um ponto de ruído ou um objeto pequeno),
+  // em grupos com pelo menos meia largura de dedo, e é preciso haver pele equivalente a mais de um dedo na imagem.
+  { const minH = 0.4*c.wr, minW = Math.round(0.5*c.wr); let total = 0, run = 0;
+    for (let x = 0; x <= RZW; x++){
+      let ok = false;
+      if (x < RZW && yl[x] >= 0){ let cnt = 0; for (let y = 0; y < h && cnt < minH; y++) cnt += m[y*RZW+x]; ok = cnt >= minH; if (!ok) yl[x] = -1; }
+      if (ok) run++; else { if (run >= minW) total += run; else for (let k = x - run; k < x; k++) yl[k] = -1; run = 0; }
+    }
+    if (total < 1.2*c.wr) yl.fill(-1);
+  }
+  for (let x = 0; x < RZW; x++) raw[x] = yl[x] < 0 ? 999 : (c.a*x + c.b) - (yl[x] + yTop);
+  const gap = rzMedian5(raw), pxmm = c.wr/16, tauOn = S.rzTauMm*pxmm, tauOff = tauOn + Math.max(2, 1.5*pxmm);
+  // …e por coluna: variações pequenas do espaço dedo–mesa são suavizadas; saltos grandes passam diretos.
+  if (rz.gapS && rz.gapS.length === RZW) for (let x = 0; x < RZW; x++){ const a = rz.gapS[x], b = gap[x]; if (a < 900 && b < 900 && Math.abs(a - b) < 3.5) gap[x] = a + 0.4*(b - a); }
+  rz.gapS = gap;
+  const res = rzAnalyze(gap, RZW, c.wr, tauOn, tauOff, rz.prev);
+  // Seguir cada dedo pousado de um fotograma para o outro e suavizar a posição (tecla estável).
+  const follow = (old, val, big) => Math.abs(val - old) > big ? val : old + 0.35*(val - old);
+  rz.hist.push({ t, gap }); while (rz.hist.length && t - rz.hist[0].t > 0.3) rz.hist.shift();
+  for (const tc of res.touches){
+    let pv = null, bd = 0.6*c.wr; for (const q of rz.prev){ const d = Math.abs(q.x - tc.x); if (d < bd){ bd = d; pv = q; } }
+    tc.xs = pv ? follow(pv.xs, tc.x, 0.35*c.wr) : tc.x; tc.pens = pv ? follow(pv.pens, tc.pen, 4) : tc.pen;
+    if (pv){ tc.snd = pv.snd; tc.vel = pv.vel; continue; }
+    // Dedo que acabou de cruzar a linha do piano: toca logo. (Opção "exigir batida": só toca se há ≤ 250 ms estava a strikeMm
+    // acima da linha; um dedo que desce devagar fica mudo.) A força vem da velocidade com que desceu.
+    let best = 0, tb = t;
+    for (const fr of rz.hist){
+      if (fr.t >= t || t - fr.t > 0.25) continue;
+      let g = 999; for (let x = Math.max(0, Math.round(tc.x - tc.w/3)); x <= Math.min(RZW-1, Math.round(tc.x + tc.w/3)); x++) g = Math.min(g, fr.gap[x]);
+      g = Math.min(g, 60); if (g > best){ best = g; tb = fr.t; }
+    }
+    const mm = best/pxmm, speed = mm/Math.max(t - tb, 1/60);
+    tc.snd = !S.rzStrike || mm >= S.strikeMm; tc.vel = clamp(0.3 + speed/500, 0.3, 1);
+  }
+  // Pontas no ar: só aparecem depois de 3 fotogramas seguidos e aguentam 2 falhas.
+  const used = new Set();
+  for (const hv of res.hovers){
+    let bt = null, bd = 0.6*c.wr; for (const tr of rz.tracks){ const d = Math.abs(tr.x - hv.x); if (d < bd && !used.has(tr)){ bd = d; bt = tr; } }
+    if (bt){ used.add(bt); bt.x = follow(bt.x, hv.x, 0.4*c.wr); bt.gap = follow(bt.gap, hv.gap, 5); bt.age++; bt.miss = 0; }
+    else { const tr = { x:hv.x, gap:hv.gap, age:1, miss:0 }; rz.tracks.push(tr); used.add(tr); }
+  }
+  rz.tracks = rz.tracks.filter(tr => used.has(tr) || ++tr.miss <= 2);
+  res.hovers = rz.tracks.filter(tr => tr.age >= 3);
+  // Pontas reais dos dedos, se o reconhecimento de mãos as estiver a ver neste fotograma.
+  const tips = [], spans = [];
+  for (const hs of [hands.L, hands.R]){
+    if (duoOn() || !hs.pts || t - hs.lastSeen > 0.15) continue;
+    let x1 = 1e9, x2 = -1e9; for (const q of hs.pts){ x1 = Math.min(x1, q[0]*rz.sc); x2 = Math.max(x2, q[0]*rz.sc); }
+    spans.push([x1 - 0.3*c.wr, x2 + 0.3*c.wr]);
+    for (let f = 0; f < 5; f++){ const q = hs.pts[TIPS[f]]; tips.push({ x:q[0]*rz.sc, y:q[1]*rz.sc, f, used:false }); }
+  }
+  rz.mp = tips.length > 0 && !duoOn();
+  if (duoOn()){ res.hovers = []; for (const hs of [hands.L, hands.R]) for (const fs of hs.fingers){ fs.duo = null; fs.duoUsed = false; } }
+  if (rz.mp){
+    for (const tc of res.touches){
+      // dedo que está a tocar = ponta reconhecida mais próxima, perto da mesa
+      let bt = null, bd = 0.9*c.wr; for (const tp of tips){ const d = Math.abs(tp.x - tc.x); if (d < bd && !tp.used && Math.abs(tp.y - (c.a*tp.x + c.b)) < 2.5*c.wr){ bd = d; bt = tp; } }
+      const pv = rz.prev.find(q => Math.abs(q.x - tc.x) < 0.6*c.wr);
+      if (bt){ bt.used = true; tc.f = bt.f; }
+      else if (pv && pv.f != null) tc.f = pv.f;
+      // pele encostada à mesa dentro de uma mão reconhecida, mas sem nenhuma ponta de dedo ali → palma/pulso: não é nota
+      else if (spans.some(sp => tc.x > sp[0] && tc.x < sp[1])) tc.ignore = !(pv && pv.snd);
+    }
+    res.touches = res.touches.filter(tc => !tc.ignore);
+    // bolas no ar = pontas reconhecidas que não estão a tocar
+    res.hovers = tips.filter(tp => !tp.used).map(tp => ({ x:tp.x, y:tp.y, gap:Math.max(0, c.a*tp.x + c.b - tp.y), f:tp.f }));
+  }
+  // notas: um dedo pousado → uma tecla. Perto da fronteira entre teclas mantém a tecla anterior (não tremer).
+  const now = new Map();
+  for (const tc of res.touches){
+    const pv = rz.prev.find(p => Math.abs(p.x - tc.x) < 0.5*c.wr && p.midi != null);
+    const k = duoOn() ? duoToKey(tc, pv) : rzToKey(tc.xs, tc.pens); let midi = k.key ? k.key.midi : null;
+    if (duoOn()){ tc.f = k.f; tc.hand = k.hand; if (k.fs && tc.snd) k.fs.duo = midi; }
+    else if (pv && midi !== pv.midi){ const pk = KEYS.find(q => q.midi === pv.midi); if (pk && pk.black === k.black && k.a > pk.x0 - 0.12*KW && k.a < pk.x1 + 0.12*KW) midi = pv.midi; }
+    tc.midi = midi; tc.a = k.a; tc.black = k.black;
+    if (tc.snd && midi != null && !now.has(midi)) now.set(midi, tc);
+  }
+  for (const [midi, tc] of now){
+    if (rz.active.has(midi)) continue;
+    if (t - (rz.offT.get(midi) ?? -9) < 0.04) continue;
+    rz.active.set(midi, 1); noteOn(midi, tc.vel || 0.5, tc.hand || ((tc.x < c.x0) !== !!c.flip ? 'R' : 'L'), tc.f ?? null);
+  }
+  for (const midi of [...rz.active.keys()]) if (!now.has(midi)){ rz.active.delete(midi); rz.offT.set(midi, t); noteOff(midi); }
+  for (const h of res.hovers){ const k = rzToKey(h.x, 0); h.midi = k.key ? k.key.midi : null; h.a = k.a; }
+  rz.prev = res.touches; rz.prevGap = gap; rz.touches = res.touches; rz.hovers = res.hovers; rz.yl = yl; rz.yTop = yTop; rz.gap = gap;
+}
+// ---------- 4c. Modo "portátil + telemóvel" ----------
+// O telemóvel (deitado na mesa, à frente das mãos) envia a sua câmara por WebRTC e mostra o piano.
+// O portátil faz tudo: vê o TOQUE na imagem do telemóvel (motor rasante) e reconhece os DEDOS na sua própria câmara (MediaPipe);
+// cada toque é atribuído ao dedo cuja posição, vista de cima, corresponde à posição lateral do toque na imagem do telemóvel.
+const duo = { peer:null, code:null, conn:null, vid:$('video2'), on:false, loop:false, lastSend:0 };
+const TELE_FOV = 72;      // campo de visão horizontal típico de uma câmara de selfie (graus)
+function duoStart(){
+  if (duo.peer || typeof Peer === 'undefined'){ renderPair(); return; }
+  duo.code = store.duoCode || (store.duoCode = String(10000 + Math.floor(Math.random()*90000))); save();
+  const peer = duo.peer = new Peer('pianodigital-' + duo.code);
+  peer.on('open', renderPair);
+  peer.on('error', e => { if (e.type === 'unavailable-id'){ store.duoCode = null; duo.peer = null; try { peer.destroy(); } catch(_){} duoStart(); } else { $('pairStatus').textContent = 'Erro de ligação: ' + e.type; } });
+  peer.on('disconnected', () => { try { peer.reconnect(); } catch(_){} });
+  peer.on('connection', cn => { duo.conn = cn; cn.on('close', () => { if (duo.conn === cn) duo.conn = null; renderPair(); }); cn.on('open', renderPair); });
+  peer.on('call', call => {
+    call.answer();
+    call.on('stream', st => { duo.vid.srcObject = st; duo.vid.play().catch(()=>{}); duo.on = true; renderPair(); duoLoop(); });
+    call.on('close', () => { duo.on = false; rzReleaseAll(); renderPair(); });
+  });
+  renderPair();
+}
+function renderPair(){
+  const show = duoOn() && !duo.on;
+  $('pairBox').style.display = show ? 'block' : 'none'; $('pip').style.display = duoOn() && duo.on ? 'block' : 'none';
+  if (!duoOn()) return;
+  const url = location.origin + location.pathname + '?tele=' + (duo.code || '');
+  $('pairCode').textContent = duo.code || '–';
+  if (location.protocol === 'file:'){ $('pairHelp').innerHTML = 'Para usar o telemóvel, a app tem de ser aberta pelo endereço <b>https</b> onde está publicada (não como ficheiro).'; $('pairQR').innerHTML = ''; }
+  else if (typeof qrcode !== 'undefined' && duo.code){ const q = qrcode(0, 'M'); q.addData(url); q.make(); $('pairQR').innerHTML = q.createSvgTag({ cellSize:4, margin:1, scalable:true }); }
+  $('pairStatus').textContent = typeof Peer === 'undefined' ? 'Sem ligação à internet: não consegui carregar o módulo de emparelhamento.' : (duo.peer && duo.peer.open ? 'À espera do telemóvel…' : 'A preparar a ligação…');
+  renderCalStatus();
+}
+// Ciclo dos fotogramas do telemóvel
+function duoLoop(){
+  if (duo.loop) return; duo.loop = true;
+  const step = () => {
+    if (duoOn() && duo.on && duo.vid.readyState >= 2 && duo.vid.videoWidth){
+      rzSize(); try { rzFrame(performance.now()/1000); } catch(e){ console.warn(e); }
+      duoPip();
+    }
+  };
+  if ('requestVideoFrameCallback' in HTMLVideoElement.prototype){ const cb = () => { step(); duo.vid.requestVideoFrameCallback(cb); }; duo.vid.requestVideoFrameCallback(cb); }
+  else setInterval(step, 33);
+}
+// Miniatura da imagem do telemóvel, com a linha de toque e os toques (para confirmares que está a ver bem)
+function duoPip(){
+  const cv = $('pip'), g = cv.getContext('2d'), v = duo.vid, k = cv.width/RZW; cv.height = Math.round(cv.width*v.videoHeight/v.videoWidth);
+  g.drawImage(v, 0, 0, cv.width, cv.height);
+  const c = store.rz; if (!c) return;
+  g.strokeStyle = AQ_HI; g.lineWidth = 1.5; g.beginPath(); g.moveTo(0, c.b*k); g.lineTo(cv.width, (c.a*RZW + c.b)*k); g.stroke();
+  for (const q of rz.touches){ g.beginPath(); g.arc(q.xs*k, (c.a*q.xs + c.b)*k, 6, 0, Math.PI*2); g.fillStyle = q.snd ? (q.f != null ? FINGER_COLORS[q.f] : AQ_HI) : 'rgba(255,255,255,0.35)'; g.fill(); }
+}
+// Toque na imagem do telemóvel (posição lateral x) → dedo e tecla vistos pela câmara do portátil.
+function duoToKey(tc, pv){
+  const c = store.rz, D = c.duo; let best = null, bd = 0.85*c.wr;
+  if (D && piano) for (const hs of [hands.L, hands.R]){
+    if (!hs.pts || lastFrameT - hs.lastSeen > 0.25) continue;
+    hs.fingers.forEach((fs, f) => {
+      if (!fs.tc || fs.duoUsed) return;
+      // posição prevista deste dedo na imagem do telemóvel (perspetiva: quanto mais perto do telemóvel, mais "largo" fica)
+      const Z = D.Z0 + (fs.tc[1] - D.b0)*piano.s; if (Z < 40) return;
+      const xp = RZW/2 + D.sg*D.fp*(fs.tc[0]*piano.s - D.Ac)/Z;
+      let d = Math.abs(xp - tc.xs); if (pv && pv.f === f && pv.hand === hs.id) d *= 0.6;      // preferência pelo dedo que já estava a tocar
+      if (d < bd){ bd = d; best = { hs, f, fs }; }
+    });
+  }
+  if (best){ best.fs.duoUsed = true; const key = keyAtPlane(best.fs.tc[0], best.fs.tc[1]); return { a:best.fs.tc[0], black:!!(key && key.black), key, f:best.f, hand:best.hs.id, fs:best.fs }; }
+  // Nenhum dedo reconhecido naquele sítio: tecla só pela posição lateral do toque.
+  const a = D ? (D.Ac + D.sg*(tc.xs - RZW/2)*D.Z0/D.fp)/(piano ? piano.s : 1) : PW/2;
+  const bk = KEYS.find(k => k.black && Math.abs(a - (k.x0 + k.x1)/2) <= S.rzBlackHalf);
+  return { a, black:!!bk, key: bk || keyAtPlane(a, KL*0.8), f:null, hand:null };
+}
+// Fim do passo "pontas pousadas" no modo duo: relacionar as duas vistas.
+function duoFitMap(yl, c){
+  const As = [], bs = [];
+  if (piano) for (const hs of [hands.L, hands.R]) if (hs.pts && lastFrameT - hs.lastSeen < 0.4) for (const fs of hs.fingers) if (fs.tc && fs.tc[0] > -KW && fs.tc[0] < PW + KW){ As.push(fs.tc[0]*piano.s); bs.push(fs.tc[1]); }
+  const cols = []; for (let x = 0; x < RZW; x++) if (yl[x] >= 0 && c.a*x + c.b - yl[x] <= 3) cols.push(x);
+  if (As.length < 3 || cols.length < 10) return null;
+  const A1 = Math.min(...As), A2 = Math.max(...As), x1 = cols[0], x2 = cols[cols.length-1];
+  if (A2 - A1 < 40 || x2 - x1 - c.wr < 20) return null;
+  const m = (x2 - x1 - c.wr)/(A2 - A1), mA = (A1 + A2)/2, mX = (x1 + x2)/2, fp = (RZW/2)/Math.tan(TELE_FOV*Math.PI/360);
+  // sentido (imagem espelhada ou não): o que deixa os dedos vistos de cima mais perto das colunas com toque
+  const colSet = new Uint8Array(RZW); cols.forEach(x => colSet[x] = 1);
+  const resid = sg => { let q = 0; for (const A of As){ const xp = Math.round(mX + sg*m*(A - mA)); let d = 0; while (d < 60 && !(colSet[xp-d] || colSet[xp+d])) d++; q += d; } return q; };
+  const rN = resid(-1), rP = resid(1), sg = rP < 0.85*rN ? 1 : -1;
+  return { sg, fp, m, mA, mX, Z0: fp/m, Ac: mA - sg*(mX - RZW/2)/m, b0: mean(bs), n: As.length };
+}
+
+// ---------- 4d. Ecrã do telemóvel ----------
+const tele = { st:null, t:0 };
+function startTele(){
+  document.body.classList.add('tele'); $('teleUI').style.display = 'block'; $('teleCode').value = TELE || '';
+  const msg = (t, col) => { $('teleMsg').textContent = t; $('teleMsg').style.color = col || 'var(--muted)'; };
+  $('teleGo').onclick = async () => {
+    const code = $('teleCode').value.trim();
+    if (!/^\d{5}$/.test(code)){ msg('Escreve os 5 algarismos que aparecem no portátil.', 'var(--warn)'); return; }
+    if (typeof Peer === 'undefined'){ msg('Sem internet: não consegui carregar o módulo de ligação.', 'var(--bad)'); return; }
+    msg('A abrir a câmara…');
+    let st;
+    try { st = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:30 } }, audio:false }); }
+    catch(e){ msg('Não consegui abrir a câmara (' + (e.name || e) + '). Permite a câmara para este site.', 'var(--bad)'); return; }
+    $('teleVid').srcObject = st;
+    try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){}
+    try { await document.documentElement.requestFullscreen(); await screen.orientation.lock('landscape'); } catch(e){}
+    msg('A ligar ao portátil…');
+    const peer = new Peer(), host = 'pianodigital-' + code;
+    peer.on('open', () => {
+      const cn = peer.connect(host, { reliable:false });
+      cn.on('open', () => { $('teleStart').style.display = 'none'; });
+      cn.on('data', d => { tele.st = d; tele.t = performance.now(); });
+      cn.on('close', () => { $('teleStart').style.display = 'block'; msg('Ligação perdida. Carrega outra vez em “Ligar”.', 'var(--warn)'); });
+      peer.call(host, st);
+    });
+    peer.on('error', e => msg(e.type === 'peer-unavailable' ? 'Não encontrei o portátil com esse código. Confirma que o portátil está no modo “Portátil + telemóvel”.' : 'Erro: ' + e.type, 'var(--bad)'));
+  };
+  const cv = $('teleCv'), g = cv.getContext('2d');
+  const draw = () => {
+    const dpr = devicePixelRatio || 1, W = cv.width = Math.round(innerWidth*dpr), H = cv.height = Math.round(innerHeight*dpr), d = tele.st;
+    g.fillStyle = '#030908'; g.fillRect(0, 0, W, H);
+    if (d){
+      const lo = d.lo, hi = d.hi, nW = 7*((hi - lo + 1)/12), kw = W/nW, top = H*0.34, kh = H - top - 4*dpr, bh = kh*0.6;
+      const act = new Set(d.act), exp = new Set(d.exp), names = d.lab === 'solfege' ? SOLFEGE : NOTE_NAMES;
+      const xOf = m => { let wi = 0; for (let q = lo; q < m; q++) if (!isBlack(q)) wi++; return wi; };
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      for (const black of [false, true]) for (let m = lo; m <= hi; m++){
+        if (isBlack(m) !== black) continue;
+        const wi = xOf(m), x = black ? wi*kw - kw*0.31 : wi*kw, w = black ? kw*0.62 : kw, h = black ? bh : kh;
+        g.fillStyle = act.has(m) ? AQ : (black ? '#03100f' : 'rgba(21,160,147,0.04)'); g.fillRect(x, top, w, h);
+        g.shadowColor = exp.has(m) ? '#eafaf7' : AQ_HI; g.shadowBlur = (exp.has(m) ? 16 : 6)*dpr; g.strokeStyle = exp.has(m) ? '#eafaf7' : AQ; g.lineWidth = (exp.has(m) ? 3 : 1.2)*dpr; g.strokeRect(x, top, w, h); g.shadowBlur = 0;
+        if (d.lab !== 'none'){ const t = names[m % 12] + (Math.floor(m/12) - 1), fz = Math.min(13*dpr, w/(t.length*0.62)); if (fz >= 6*dpr){ g.font = `600 ${fz}px Inter, system-ui`; g.fillStyle = act.has(m) ? '#021110' : '#86aaa5'; g.fillText(t, x + w/2, top + h - fz); } }
+      }
+      for (const q of d.dots){ const x = q[0]*W, y = top + (q[1] ? bh*0.5 : kh*0.8); g.beginPath(); g.arc(x, y, (q[3] ? 13 : 8)*dpr, 0, Math.PI*2); g.fillStyle = q[2] != null ? FINGER_COLORS[q[2]] : AQ_HI; if (q[3]){ g.shadowColor = '#eafaf7'; g.shadowBlur = 14*dpr; } g.fill(); g.shadowBlur = 0; }
+      g.textAlign = 'left'; g.font = `700 ${Math.round(H*0.16)}px Inter, system-ui`; g.fillStyle = AQ_HI; g.shadowColor = AQ; g.shadowBlur = 14*dpr; g.fillText(d.note || '–', 14*dpr, H*0.13); g.shadowBlur = 0;
+      g.font = `500 ${Math.round(H*0.045)}px Inter, system-ui`; g.fillStyle = '#86aaa5'; g.fillText(d.who || '', 14*dpr, H*0.26);
+      if (d.song){ g.textAlign = 'center'; g.fillStyle = '#d8efec'; g.fillText(d.song, W/2, H*0.26); }
+      if (performance.now() - tele.t > 2500){ g.textAlign = 'center'; g.fillStyle = '#ffb84d'; g.fillText('Sem dados do portátil…', W/2, H*0.13); }
+    }
+    requestAnimationFrame(draw);
+  };
+  requestAnimationFrame(draw);
+}
+// Estado enviado ao telemóvel (~15 vezes por segundo)
+function duoSend(now){
+  if (!duo.conn || !duo.conn.open || now - duo.lastSend < 66) return; duo.lastSend = now;
+  const dots = [];
+  for (const hs of [hands.L, hands.R]) if (hs.pts) hs.fingers.forEach((fs, f) => { if (fs.tc && fs.tc[0] > -KW && fs.tc[0] < PW + KW && fs.tc[1] > -0.3*KL && fs.tc[1] < 1.4*KL) dots.push([clamp(fs.tc[0]/PW, 0, 1), fs.tc[1] <= BL ? 1 : 0, f, fs.duo != null ? 1 : 0]); });
+  try { duo.conn.send({ lo:LOW, hi:HIGH, lab:S.labels, act:[...held.keys()], exp:[...expectedSet()], dots, note:$('ltNote').textContent, who:$('ltWho').textContent, song: practice.groups.length ? practice.name + ' · ' + $('scStats').textContent : '' }); } catch(e){}
+}
+
+// Calibração rasante: 1) sem mãos (fundo) 2) pontas dos dedos pousadas na linha das teclas brancas 3) dedos avançados (teclas pretas).
+function startRzCal(){
+  if (!stream){ banner('Ativa a câmara primeiro.', 2500); return; }
+  if (duoOn() && !duo.on){ banner('Liga primeiro o telemóvel (código QR no ecrã).', 3000); return; }
+  if (rz.calib) return;
+  closePops(); rzReleaseAll(); rzSize();
+  const C = rz.calib = { phase:null, n:0, cnt:null, cols:null, timers:[] };
+  const seq = (phase, txt, t0) => {
+    for (let k = 0; k < 4; k++) C.timers.push(setTimeout(() => banner(`${txt}… ${4-k}`), t0 + k*1000));
+    C.timers.push(setTimeout(() => { C.phase = phase; C.n = 0; C.cnt = new Uint16Array(RZW*rz.H); C.cols = Array.from({length:RZW}, () => []); banner('Não mexas…'); }, t0 + 4000));
+    C.timers.push(setTimeout(() => rzCalEnd(phase), t0 + 5200));
+  };
+  if (duoOn()){
+    seq('bg', 'Telemóvel 1/2 · Tira as mãos da mesa', 0);
+    seq('white', 'Telemóvel 2/2 · Pousa as PONTAS dos dedos das duas mãos nas teclas brancas do piano desenhado', 5600);
+    return;
+  }
+  seq('bg', 'Passo 1/4 · Tira as mãos da frente da câmara', 0);
+  seq('white', 'Passo 2/4 · Pousa as PONTAS dos dedos das duas mãos na mesa, na linha onde queres tocar', 5600);
+  seq('side', 'Passo 3/4 · Tira a mão DIREITA da imagem (põe-na no colo) e deixa a ESQUERDA pousada', 11200);
+  seq('black', 'Passo 4/4 · Pousa as duas mãos outra vez, com os dedos uns 6 cm mais perto da câmara (zona das teclas pretas)', 16800);
+}
+function rzCalFrame(){
+  const C = rz.calib; if (!C.phase) return;
+  const n = RZW*rz.H, data = rzGrab(0, rz.H), thr = (store.rz && store.rz.thr) || 7;
+  const m = rzSkin(data, n, thr, C.phase === 'bg' ? null : rz.bg, new Uint8Array(n));
+  C.n++;
+  if (C.phase === 'bg'){ for (let i = 0; i < n; i++) C.cnt[i] += m[i]; return; }
+  // ignora o terço de cima da imagem (cara/pescoço) e procura a parte de baixo da pele em cada coluna
+  for (let i = 0; i < RZW*Math.round(rz.H*0.3); i++) m[i] = 0;
+  const yl = rzLowest(m, RZW, rz.H);
+  for (let x = 0; x < RZW; x++) if (yl[x] >= 0) C.cols[x].push(yl[x]);
+}
+function rzCalEnd(phase){
+  const C = rz.calib; if (!C) return; C.phase = null;
+  const fail = msg => { C.timers.forEach(clearTimeout); rz.calib = null; banner(msg, 4500); renderCalStatus(); };
+  if (C.n < 4) return fail('A câmara não deu imagens suficientes. Repete.');
+  if (phase === 'bg'){
+    // fundo: píxeis com cor de pele sem mãos (objetos, madeira…) — ficam excluídos. Dilata 2 px.
+    const b0 = new Uint8Array(RZW*rz.H); for (let i = 0; i < b0.length; i++) b0[i] = C.cnt[i] >= 0.3*C.n ? 1 : 0;
+    const b = new Uint8Array(b0.length);
+    for (let y = 0; y < rz.H; y++) for (let x = 0; x < RZW; x++){ if (!b0[y*RZW+x]) continue; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++){ const X = x+dx, Y = y+dy; if (X >= 0 && X < RZW && Y >= 0 && Y < rz.H) b[Y*RZW+X] = 1; } }
+    rz.bg = b; return;
+  }
+  const yl = new Float32Array(RZW);
+  for (let x = 0; x < RZW; x++){ const v = C.cols[x]; if (v.length < 0.5*C.n) yl[x] = -1; else { v.sort((p,q) => p-q); yl[x] = v[v.length>>1]; } }
+  if (phase === 'white'){
+    const ln = rzFitLine(yl); if (!ln) return fail('Não vi os dedos pousados. Repete com mais luz à frente das mãos.');
+    // largura de um dedo: séries de colunas que chegam à linha
+    const runs = []; let x = 0, xmin = RZW, xmax = 0;
+    while (x < RZW){ if (yl[x] >= 0 && ln.a*x + ln.b - yl[x] <= 3){ const x1 = x; while (x < RZW && yl[x] >= 0 && ln.a*x + ln.b - yl[x] <= 3) x++; if (x - x1 >= 6){ runs.push(x - x1); xmin = Math.min(xmin, x1); xmax = Math.max(xmax, x); } } else x++; }
+    if (!runs.length) return fail('Não consegui medir os dedos. Repete com os dedos um pouco afastados.');
+    const single = runs.filter(w => w <= 60).sort((p,q) => p-q), wr = single.length ? single[single.length>>1] : 24;
+    store.rz = { a:ln.a, b:ln.b, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr:(store.rz && store.rz.thr) || 7, flip:!!(store.rz && store.rz.flip), sideOk:false, vw:rzSrc().videoWidth, vh:rzSrc().videoHeight };
+    if (duoOn()){
+      const c2 = store.rz; c2.duo = duoFitMap(yl, c2);
+      save(); rz.calib = null; rzReleaseAll(); renderCalStatus(); renderWizard();
+      banner(c2.duo ? `Calibrado. O telemóvel vê o toque e o portátil reconhece os dedos (${c2.duo.n} dedos usados para alinhar as duas câmaras).` : 'Calibrado, mas o portátil não estava a ver os dedos: as teclas vão sair só pela posição lateral. Confirma que a câmara do portátil vê as mãos e recalibra.', 6000);
+    }
+    return;
+  }
+  if (phase === 'side'){
+    // Só a mão esquerda ficou pousada: o lado onde ainda há dedos na linha é o lado esquerdo do pianista.
+    const c0 = store.rz; if (!c0) return fail('Calibração incompleta. Repete.');
+    let l = 0, r = 0; for (let x = 0; x < RZW; x++) if (yl[x] >= 0 && c0.a*x + c0.b - yl[x] <= 45){ if (x < c0.x0) l++; else r++; }
+    if (Math.max(l, r) >= 12 && (l > 2*r || r > 2*l)){ c0.flip = l > r; c0.sideOk = true; }
+    return;
+  }
+  // teclas pretas: quantos px abaixo da linha ficam os dedos avançados
+  const c = store.rz; if (!c) return fail('Calibração incompleta. Repete.');
+  const pens = []; for (let x = 0; x < RZW; x++) if (yl[x] >= 0){ const p = yl[x] - (c.a*x + c.b); if (p > -3 && p < 60) pens.push(p); }
+  pens.sort((p,q) => p-q); c.pb = pens.length > 20 ? Math.max(0, pens[Math.floor(pens.length*0.75)]) : 0;
+  save(); rz.calib = null; rzReleaseAll(); renderCalStatus(); renderWizard();
+  banner(rzDepthOk() ? `Calibrado. Brancas na linha, pretas com o dedo avançado (diferença medida: ${c.pb.toFixed(1)} px).` : 'Calibrado. Deste ângulo não distingo o dedo avançado, por isso as pretas ficam ENTRE as brancas: põe o dedo em cima da risca entre duas teclas.', 5000);
+  setTimeout(() => { $('askSide').style.display = 'block'; }, 4200);
+}
+
+// ---------- 5. One Euro Filter ----------
+class LowPass { constructor(){ this.y = null; } f(x, a){ this.y = this.y === null ? x : a*x + (1-a)*this.y; return this.y; } }
+class OneEuro {
+  constructor(){ this.x = new LowPass(); this.dx = new LowPass(); this.tPrev = null; }
+  static alpha(cut, dt){ const tau = 1/(2*Math.PI*cut); return 1/(1 + tau/dt); }
+  filter(x, t, minCutoff, beta, dCutoff = 1.0){
+    if (this.tPrev === null){ this.tPrev = t; this.dx.f(0, 1); return this.x.f(x, 1); }
+    const dt = Math.max(1e-3, t - this.tPrev); this.tPrev = t;
+    const edx = this.dx.f((x - this.x.y)/dt, OneEuro.alpha(dCutoff, dt));
+    return this.x.f(x, OneEuro.alpha(minCutoff + beta*Math.abs(edx), dt));
+  }
+}
+const euroParams = () => ({ minCutoff: 0.5 + (1 - S.smoothing)*6.0, beta: 0.03 });
+
+// ---------- 6. Mãos em 3D ----------
+function newFinger(){ return { state:'up', h:null, rate:0, hist:[], drop:0, near:false, amp:0, zoneT:null, hRef:0, relT:-9, duo:null, duoUsed:false, maxOther:0, slideKey:null, slideT:0, lastChange:0, pk:0, hi:0, hmin:0, pendT:0, lastPress:-1, midi:null, contact:null, hoverKey:null }; }
+class HandState {
+  constructor(id){ this.id = id; this.reset(); }
+  reset(){ this.filters = Array.from({length:42}, () => new OneEuro()); this.wfilters = Array.from({length:63}, () => new OneEuro()); this.tz = new OneEuro();
+           this.pts = null; this.X = null; this.W = null; this.lastT = null; this.lastSeen = -1; this.floor = 0; this.cand = 0; this.candT = -9; this.lowN = 0; this.mis = 0; this.dt = 0; this.ps = 1; this.fingers = [0,1,2,3,4].map(newFinger); }
+}
+const hands = { L:new HandState('L'), R:new HandState('R') };
+
+function processResults(res, t){
+  const dets = [];
+  if (res && res.landmarks) res.landmarks.forEach((lm, i) => {
+    // Esquerda/direita pela geometria (palma para baixo: a câmara vê as costas da mão).
+    const ax = (lm[5].x-lm[0].x)*vw, ay = (lm[5].y-lm[0].y)*vh, bx = (lm[17].x-lm[0].x)*vw, by = (lm[17].y-lm[0].y)*vh;
+    dets.push({ lm, wl: res.worldLandmarks ? res.worldLandmarks[i] : null, geom: ((ax*by - ay*bx > 0) !== S.swapHands) ? 'R' : 'L', x: lm[0].x*vw, y: lm[0].y*vh, id:null });
+  });
+  // 1) Continuidade: cada deteção fica com a mão que já estava mais perto (evita trocas a meio, que estragam os filtros).
+  const free = { L:true, R:true }, cands = [];
+  for (const d of dets) for (const id of ['L','R']){ const hs = hands[id]; if (hs.pts && t - hs.lastSeen < 0.3) cands.push([Math.hypot(d.x - hs.pts[0][0], d.y - hs.pts[0][1]), d, id]); }
+  cands.sort((a,b) => a[0] - b[0]);
+  for (const [dist, d, id] of cands) if (dist < 0.2*vw && !d.id && free[id]){ d.id = id; free[id] = false; }
+  // 2) Mãos novas: etiqueta geométrica (ou o lugar que sobrar).
+  for (const d of dets){ if (d.id) continue; let id = d.geom; if (!free[id]) id = id === 'L' ? 'R' : 'L'; if (!free[id]) continue; d.id = id; free[id] = false; }
+  for (const d of dets){
+    if (!d.id) continue;
+    const hs = hands[d.id]; hs.mis = d.geom !== d.id ? hs.mis + 1 : 0;
+    updateHand(hs, d.lm, d.wl, t);
+  }
+  // 3) Etiqueta errada durante ~1 s: corrigir (trocar as duas mãos, ou mudar a mão de lugar).
+  for (const id of ['L','R']){
+    const hs = hands[id], o = id === 'L' ? 'R' : 'L';
+    if (hs.mis > 25 && (free[o] || hands[o].mis > 8)){
+      releaseHand(hands.L, t); releaseHand(hands.R, t);
+      const other = free[o] ? new HandState(id) : hands[o];
+      hands[o] = hs; hs.id = o; hs.mis = 0; hands[id] = other; other.id = id; other.mis = 0;
+      break;
+    }
+  }
+  for (const id of ['L','R']){
+    const hs = hands[id];
+    if (free[id] && hs.pts && t - hs.lastSeen > 0.2){ releaseHand(hs, t); hs.reset(); }
+  }
+  recFrame(t, { L:!free.L, R:!free.R });
+}
+// Gravação de diagnóstico: guarda os pontos crus das mãos, as alturas e os estados durante 12 s, para afinar com dados reais.
+const rec = { on:false, t0:0, frames:[], timers:[] };
+function recFrame(t, seen){
+  if (!rec.on) return;
+  const r1 = x => Math.round(x*10)/10, hs = [];
+  for (const id of ['L','R']){
+    const h = hands[id]; if (!seen[id] || !h.rawLm) continue;
+    hs.push({ id, px: h.rawLm.flatMap(p => [r1(p.x*vw), r1(p.y*vh)]), W: h.rawW ? h.rawW.flatMap(p => [r1(p.x*1000), r1(p.y*1000), r1(p.z*1000)]) : null,
+              h: h.fingers.map(f => f.h === null ? null : r1(f.h)), hr: h.fingers.map(f => f.rawH == null ? null : r1(f.rawH)), st: h.fingers.map(f => f.state[0]), key: h.fingers.map(f => f.midi), floor: r1(h.floor) });
+  }
+  rec.frames.push({ t: Math.round((t - rec.t0)*1000), hands: hs });
+}
+function startRec(){
+  if (!stream || !piano){ banner('Ativa a câmara e calibra a mesa primeiro.', 3000); return; }
+  if (rec.on) return;
+  closePops(); rec.on = true; rec.t0 = lastFrameT; rec.frames = []; mic.onsets = [];
+  const steps = [[0, '1/3 · Mão direita por cima do piano, dedos NO AR e parados'], [3500, '2/3 · Toca UMA vez com cada dedo: polegar, indicador, médio, anelar, mindinho'], [9000, '3/3 · Pousa o indicador na mesa e desliza-o devagar por 3 teclas']];
+  rec.timers = steps.map(([ms, txt]) => setTimeout(() => banner('A gravar — ' + txt), ms));
+  rec.timers.push(setTimeout(() => {
+    rec.on = false;
+    const out = { app:'piano-digital', when:new Date().toISOString(), ua:navigator.userAgent, vw, vh, fps:fpsNow, settings:S, cal:store.cal, tweak:store.tweak, touch:store.touch,
+                  steps: steps.map(x => x[0]), onsets: mic.onsets.map(o => Math.round((o - rec.t0)*1000)), log:[...$('log').children].slice(0, 40).map(d => d.textContent), frames: rec.frames };
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(out)], { type:'application/json' })); a.download = 'piano-digital-diagnostico.json'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    banner('Gravação guardada: piano-digital-diagnostico.json — envia-me esse ficheiro.', 6000);
+  }, 13000));
+}
+
+// Microfone (opcional): o som do dedo a bater na mesa confirma que houve contacto e ensina a altura da mesa.
+const mic = { on:false, an:null, buf:null, noise:1e-4, prev:0, last:0, onsets:[], count:0 };
+let lastNoteOnMs = -1e9;
+async function startMic(){
+  if (mic.on) return true;
+  try {
+    const st = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:false, autoGainControl:false } });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaStreamSource(st), hp = ctx.createBiquadFilter(), an = ctx.createAnalyser();
+    hp.type = 'highpass'; hp.frequency.value = 120; an.fftSize = 1024; src.connect(hp); hp.connect(an);
+    Object.assign(mic, { on:true, an, buf:new Float32Array(1024), stream:st, ctx });
+    return true;
+  } catch(e){ banner('Não consegui abrir o microfone (' + (e.name || e) + ').', 3500); return false; }
+}
+function stopMic(){ if (mic.stream) mic.stream.getTracks().forEach(t => t.stop()); if (mic.ctx) mic.ctx.close(); mic.on = false; }
+function micTick(now){
+  if (!mic.on) return;
+  mic.an.getFloatTimeDomainData(mic.buf);
+  let e = 0; for (let i = 224; i < 1024; i++) e += mic.buf[i]*mic.buf[i]; e /= 800;
+  const thr = Math.max(mic.noise*8, 2e-5);
+  // Pancada: energia a subir de repente. Ignora o ataque das nossas próprias notas (colunas).
+  if (e > thr && e > mic.prev*2.5 && now - mic.last > 70 && now - lastNoteOnMs > 150){ mic.last = now; mic.onsets.push(now/1000 - 0.012); mic.count++; if (mic.onsets.length > 200) mic.onsets.shift(); }
+  if (e < thr) mic.noise = 0.97*mic.noise + 0.03*e;
+  mic.prev = e;
+}
+const heardTap = t => mic.on && mic.onsets.some(o => Math.abs(o - t) < 0.15);
+
+// Captura 6 imagens da câmara numa só folha (3×2), para desenhar o detetor da câmara rasante com imagens reais.
+let shotsBusy = false;
+function startShots(){
+  if (!stream){ banner('Ativa a câmara primeiro.', 2500); return; }
+  if (shotsBusy) return; shotsBusy = true; closePops();
+  const poses = ['as duas mãos com os dedos NO AR', 'TODOS os dedos pousados na mesa', 'só o INDICADOR DIREITO pousado, os outros no ar', 'só o MÉDIO DIREITO pousado, os outros no ar',
+                 'dedos pousados, com a mão direita AVANÇADA uns 8 cm (como para as teclas pretas)', 'dedos no ar, com as duas mãos 10 cm mais para a DIREITA'];
+  const cv = document.createElement('canvas'); cv.width = vw*3; cv.height = vh*2; const g = cv.getContext('2d'); let i = 0;
+  const next = () => {
+    if (i >= poses.length){
+      cv.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'piano-digital-imagens.jpg'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); }, 'image/jpeg', 0.9);
+      shotsBusy = false; banner('Guardado: piano-digital-imagens.jpg — envia-me esse ficheiro.', 6000); return;
+    }
+    let n = 5;
+    const tick = () => { n--; if (n > 0){ banner(`Imagem ${i+1}/6 — ${poses[i]}… ${n}`); setTimeout(tick, 1000); } else { g.drawImage(video, (i%3)*vw, Math.floor(i/3)*vh, vw, vh); i++; next(); } };
+    tick();
+  };
+  next();
+}
+
+function releaseHand(hs, t){ hs.fingers.forEach((fs,f) => { if (fs.state === 'down') release(hs, f, t); fs.state = 'up'; fs.hist = []; }); }
+
+function updateHand(hs, lm, wl, t){
+  const { minCutoff, beta } = euroParams();
+  const dt = hs.lastT === null ? 0 : t - hs.lastT;
+  if (dt > 0.3) hs.fingers.forEach(fs => { fs.h = null; fs.hist = []; });
+  hs.lastT = t; hs.lastSeen = t; hs.dt = dt; hs.rawLm = lm; hs.rawW = wl;
+  const F = hs.filters, FW = hs.wfilters;
+  const P = hs.pts = lm.map((p, i) => [F[i*2].filter(p.x*vw, t, minCutoff, beta), F[i*2+1].filter(p.y*vh, t, minCutoff, beta)]);
+  hs.X = null; hs.W = null;
+  if (wl){
+    const zs = store.cal && store.cal.zs ? store.cal.zs : 1, kap = store.cal && store.cal.kappa && store.cal.kappa[hs.id] ? store.cal.kappa[hs.id] : 1;
+    const W = wl.map((p, i) => [FW[i*3].filter(p.x*1000, t, minCutoff, beta), FW[i*3+1].filter(p.y*1000, t, minCutoff, beta), zs*FW[i*3+2].filter(p.z*1000, t, minCutoff, beta)]);
+    if (tcal.sampling){   // recolha para a calibração da mesa (z sem sinal corrigido)
+      if (!tcal.sumP[hs.id]){ tcal.sumP[hs.id] = P.map(() => [0,0]); tcal.sumW[hs.id] = P.map(() => [0,0,0]); }
+      P.forEach((p,i) => { tcal.sumP[hs.id][i][0] += p[0]; tcal.sumP[hs.id][i][1] += p[1]; tcal.sumW[hs.id][i] = V.add(tcal.sumW[hs.id][i], [W[i][0], W[i][1], zs*W[i][2]]); });
+      tcal.cnt[hs.id]++;
+    }
+    // A palma é rígida: se o modelo 3D do MediaPipe "encolher/esticar" com a pose, repõe-se o tamanho medido na calibração.
+    const pc = store.cal && store.cal.palm ? store.cal.palm[hs.id] : 0;
+    if (pc && !tcal.sampling){ hs.ps += 0.2*(clamp(pc/palmSize(W), 0.8, 1.25) - hs.ps); for (const w of W){ w[0] *= hs.ps; w[1] *= hs.ps; w[2] *= hs.ps; } }
+    hs.W = W;
+    const T = solveT(P, W, cam.f, cam.cx, cam.cy);
+    if (T && T[2] > 80){
+      // A profundidade global da mão varia devagar: filtra-se mais, para não contaminar a altura dos dedos.
+      const Tz = hs.tz.filter(T[2], t, 1.0, 0.004);
+      // 3D híbrido: direção exata do píxel + profundidade do modelo.
+      hs.X = P.map((p, i) => { const z = kap*(W[i][2] + Tz); return [(p[0]-cam.cx)/cam.f*z, (p[1]-cam.cy)/cam.f*z, z]; });
+    }
+  }
+  const palmH = piano && hs.X ? mean([5,9,13,17].map(i => V.dot(piano.n, hs.X[i]) - piano.d)) : 0;
+  const TM = store.touch && store.touch[hs.id] ? store.touch[hs.id] : null;
+  for (let f = 0; f < 5; f++){
+    const fs = hs.fingers[f], ti = TIPS[f], tip = P[ti], dip = P[ti-1];
+    fs.contact = [tip[0] + 0.15*(dip[0]-tip[0]), tip[1] + 0.15*(dip[1]-tip[1])];
+    fs.tc = tableCoords(fs.contact[0], fs.contact[1], TIP_OFF + (fs.state === 'down' || fs.duo != null ? 0 : clamp(fs.h ?? 0, 0, 30)));
+    fs.hoverKey = fs.tc ? keyAtPlane(fs.tc[0], fs.tc[1]) : null;
+    if (!piano || !hs.X){ fs.h = null; continue; }
+    const rawH = V.dot(piano.n, hs.X[ti]) - piano.d - TIP_OFF;       // altura geométrica da ponta acima da mesa (mm)
+    fs.rawH = rawH;
+    let raw = rawH;
+    const x = fingerFeats(P, hs.W, (rawH - palmH)/20, f);
+    if (qcal.sampling){ const A = qcal.acc[qcal.sampling]; if (!A[hs.id]) A[hs.id] = [[],[],[],[],[]]; A[hs.id][f].push(x); }
+    // Com o toque calibrado, a "altura" passa a ser a pontuação aprendida: 20 mm = pose no ar, 0 mm = pose pousada.
+    if (TM) raw = 20*(1 - clamp(fingerScore(TM[f], x), -0.6, 1.6));
+    if (fs.h === null || dt <= 0){ fs.h = raw; fs.rate = 0; continue; }
+    const prev = fs.h; fs.h = prev + 0.65*(raw - prev); fs.rate = (fs.h - prev)/dt;
+  }
+  // Nível da mesa para esta mão (hs.floor, em mm relativos ao plano calibrado):
+  //  · nenhum dedo pode estar abaixo da mesa → o mínimo puxa o nível para baixo (2 fotogramas seguidos, contra ruído);
+  //  · um dedo pousado ESTÁ na mesa → o nível segue-o (desce depressa, sobe devagar).
+  let m = Infinity; for (const fs of hs.fingers) if (fs.h !== null && fs.h < m) m = fs.h;
+  if (m < hs.floor - 4){ if (++hs.lowN >= 2) hs.floor += 0.5*((m + 2) - hs.floor); } else hs.lowN = 0;
+  let ref = Infinity; for (const fs of hs.fingers) if (fs.state === 'down' && fs.hRef < ref) ref = fs.hRef;
+  if (ref < Infinity){ if (ref < hs.floor) hs.floor += 0.3*(ref - hs.floor); else hs.floor = Math.min(ref, hs.floor + 1.5*dt, 30); }
+  for (let f = 0; f < 5; f++){
+    const fs = hs.fingers[f]; if (fs.h === null) continue;
+    if (!tcal.sampling && !tcal.timer && !qcal.busy && S.engine === 'top') detectTouch(hs, f, t);
+    pushDebug(hs.id, f, t, fs.h);
+  }
+}
+
+// ---------- 7. Detetor de toque ----------
+// Um dedo está POUSADO quando a sua altura está na zona de toque: h ≤ nível da mesa + touchMm.
+// up → (pending) → down → up:
+//  · toque: desceu ≥ A mm nos últimos 300 ms e acabou na zona → espera confirmMs e compara com os outros dedos;
+//  · pousar devagar: está bem dentro da zona, parado, há 0,3 s → nota (sem precisar de descida rápida);
+//  · pousado: mantém a nota; se deslizar para outra tecla, muda de nota; solta quando sobe releaseMm;
+//  · toque claro mas fora da zona: à 2.ª vez à mesma altura assume-se que a mesa é aí.
+function othersMax(hs, f, t){
+  let mx = 0;
+  hs.fingers.forEach((o, i) => {
+    if (i === f || o.h === null) return;
+    const a = o.state === 'down' ? (t - o.lastPress < 0.15 ? o.amp : 0) : (o.state === 'pending' ? o.amp : o.drop);
+    if (a > mx) mx = a;
+  });
+  return mx;
+}
+function detectTouch(hs, f, t){
+  const fs = hs.fingers[f], A = 8 / S.sensitivity;
+  let hi = -1e9, pk = 0, thi = t;
+  for (const e of fs.hist) if (t - e[0] <= 0.3){ if (e[1] > hi){ hi = e[1]; thi = e[0]; } if (-e[2] > pk) pk = -e[2]; }
+  fs.drop = hi > -1e8 ? hi - fs.h : 0;
+  const avgSpeed = fs.drop/Math.max(t - thi, 1/60);       // velocidade média da descida (mais estável do que a instantânea)
+  const zoneOn = hs.floor + S.touchMm, zoneOff = zoneOn + S.releaseMm, inZone = fs.h <= zoneOn;
+  fs.near = inZone;
+  const ready = t - fs.lastPress > S.debounceMs/1000;
+  const arm = () => { fs.state = 'pending'; fs.pendT = t; fs.amp = fs.drop; fs.hi = hi; fs.pk = Math.max(pk, -fs.rate); fs.maxOther = othersMax(hs, f, t); if (S.confirmMs <= 0) confirmTouch(hs, f, t); };
+
+  if (fs.state === 'up'){
+    if (inZone){ if (fs.zoneT === null) fs.zoneT = t; } else fs.zoneT = null;
+    // Logo depois de soltar (nota repetida), basta uma descida pequena para voltar a tocar.
+    const fast = !S.strikeOnly || t - fs.relT < 0.8 || avgSpeed >= S.strikeSpeed;      // intenção de tocar = descida rápida
+    // Descida necessária: normal = A; se o dedo acaba mesmo na mesa (zona de toque) basta pouco mais de metade; logo após soltar, ainda menos.
+    const need = t - fs.relT < 0.8 ? Math.min(A, S.restrikeMm) : (inZone ? Math.max(S.restrikeMm + 1, 0.55*A) : A);
+    const tap = fs.drop >= need && ready && fast;
+    if (tap && inZone) arm();
+    else if (tap && fs.rate > -60){
+      // Fora da zona, mas (a) o microfone ouviu a pancada e este é o dedo que mais desceu, ou (b) é o 2.º toque à mesma altura: a mesa é aqui.
+      if ((heardTap(t) && fs.drop >= othersMax(hs, f, t)) || (t - hs.candT < 3 && Math.abs(fs.h - hs.cand) < 6)){ hs.floor = fs.h - 1; hs.candT = -9; arm(); }
+      else { hs.cand = fs.h; hs.candT = t; fs.hist = []; reject(hs, f, t, 'acima da mesa (' + Math.round(fs.h - hs.floor) + ' mm)'); }
+    }
+    else if (!S.strikeOnly && inZone && ready && fs.h <= hs.floor + 0.6*S.touchMm && t - fs.zoneT >= 0.3 && Math.abs(fs.rate) < 40) press(hs, f, t, 0.45, false);
+  } else if (fs.state === 'pending'){
+    fs.amp = Math.max(fs.amp, fs.hi - fs.h); fs.maxOther = Math.max(fs.maxOther, othersMax(hs, f, t));
+    if (fs.h > zoneOff){ fs.state = 'up'; fs.hist = []; }
+    else if (t - fs.pendT >= S.confirmMs/1000) confirmTouch(hs, f, t);
+  } else if (fs.state === 'down'){
+    fs.hRef += (fs.h - fs.hRef)*Math.min(1, hs.dt/(fs.h < fs.hRef ? 0.1 : 0.6));
+    if (fs.h > fs.hRef + S.releaseMm || fs.h > zoneOff + 3){ release(hs, f, t); }
+    else {
+      // Nota repetida: o dedo subiu restrikeMm acima do ponto mais baixo e voltou a descer → toca outra vez a mesma tecla.
+      if (!fs.rising){ if (fs.h < fs.lo) fs.lo = fs.h; else if (fs.h > fs.lo + S.restrikeMm){ fs.rising = true; fs.top = fs.h; } }
+      else {
+        if (fs.h > fs.top) fs.top = fs.h;
+        else if (fs.h < fs.top - 0.8*S.restrikeMm && t - fs.lastChange >= S.debounceMs/1000){
+          fs.rising = false; fs.lo = fs.h; fs.lastChange = t;
+          noteOff(fs.midi); noteOn(fs.midi, clamp(0.35 + (fs.top - fs.h)/25, 0.35, 0.9), hs.id, f);
+          dbgEvents.push({ t, hand:hs.id, f, h:fs.h, type:'press' });
+        }
+      }
+      const k = keyFromImage(fs.contact[0], fs.contact[1]);
+      if (!k) release(hs, f, t);
+      else if (k.midi !== fs.midi){            // deslizar para outra tecla (2 fotogramas seguidos, para não tremer na fronteira)
+        if (fs.slideKey !== k.midi){ fs.slideKey = k.midi; fs.slideT = t; }
+        else if (t - fs.slideT >= 0.04 && t - fs.lastChange >= 0.06){ noteOff(fs.midi); fs.midi = k.midi; fs.lastChange = t; fs.slideKey = null; noteOn(k.midi, 0.5, hs.id, f); }
+      } else fs.slideKey = null;
+    }
+  }
+  if (fs.state !== 'down'){ fs.hist.push([t, fs.h, fs.rate]); while (fs.hist.length && t - fs.hist[0][0] > 0.4) fs.hist.shift(); }
+}
+// Os dedos vizinhos descem um pouco por arrasto: só passa quem desceu uma fração do que mais desceu.
+function confirmTouch(hs, f, t){
+  const fs = hs.fingers[f], mx = Math.max(fs.maxOther, othersMax(hs, f, t));
+  if (fs.amp < S.isolation*mx){ fs.state = 'up'; fs.hist = []; reject(hs, f, t, 'arrasto de outro dedo'); return; }
+  if (!press(hs, f, t, clamp(0.3 + 0.7*(fs.pk - 80)/450, 0.25, 1), true)) return;
+  // Se um vizinho entrou primeiro mas desceu muito menos e ficou mais alto, era arrasto: cancela-o.
+  hs.fingers.forEach((o, i) => { if (i !== f && o.state === 'down' && t - o.lastPress < 0.15 && o.amp < S.isolation*fs.amp && o.h > fs.h + 3) release(hs, i, t); });
+}
+function press(hs, f, t, vel, isTap){
+  const fs = hs.fingers[f], k = keyFromImage(fs.contact[0], fs.contact[1]);
+  fs.hist = [];
+  if (!k){ fs.state = 'up'; fs.zoneT = null; if (isTap) reject(hs, f, t, 'fora do piano'); return false; }
+  if (!isTap) fs.amp = S.touchMm;
+  else if (fs.h > hs.floor) hs.floor += 0.3*(fs.h - hs.floor);        // um toque claro é boa prova de onde está a mesa
+  fs.state = 'down'; fs.hRef = fs.h; fs.lo = fs.h; fs.rising = false; fs.lastPress = t; fs.lastChange = t; fs.slideKey = null; fs.midi = k.midi;
+  noteOn(k.midi, vel, hs.id, f);
+  dbgEvents.push({ t, hand:hs.id, f, h:fs.h, type:'press' });
+  return true;
+}
+function release(hs, f, t){
+  const fs = hs.fingers[f];
+  fs.state = 'up'; fs.hist = []; fs.zoneT = null; fs.lastPress = t;
+  if (fs.midi !== null) fs.relT = t;
+  if (fs.midi !== null){ noteOff(fs.midi); dbgEvents.push({ t, hand:hs.id, f, h:fs.h ?? 0, type:'release' }); }
+  fs.midi = null;
+}
+function reject(hs, f, t, why){
+  dbgEvents.push({ t, hand:hs.id, f, h:hs.fingers[f].h, type:'reject' });
+  addLog(`× ${hs.id === 'R' ? 'Dir' : 'Esq'} ${f+1}: ${why}`, 'var(--muted)');
+}
+
+// ---------- 8. Som ----------
+let sampler = null, audioReady = false;
+async function initAudio(){
+  await Tone.start();
+  Tone.context.lookAhead = 0;
+  if (sampler) return;
+  sampler = new Tone.Sampler({
+    urls: { A0:'A0.mp3', C1:'C1.mp3', 'D#1':'Ds1.mp3', 'F#1':'Fs1.mp3', A1:'A1.mp3', C2:'C2.mp3', 'D#2':'Ds2.mp3', 'F#2':'Fs2.mp3', A2:'A2.mp3',
+            C3:'C3.mp3', 'D#3':'Ds3.mp3', 'F#3':'Fs3.mp3', A3:'A3.mp3', C4:'C4.mp3', 'D#4':'Ds4.mp3', 'F#4':'Fs4.mp3', A4:'A4.mp3',
+            C5:'C5.mp3', 'D#5':'Ds5.mp3', 'F#5':'Fs5.mp3', A5:'A5.mp3', C6:'C6.mp3', 'D#6':'Ds6.mp3', 'F#6':'Fs6.mp3', A6:'A6.mp3' },
+    release: 1.2, baseUrl: 'https://tonejs.github.io/audio/salamander/',
+    onload: () => { audioReady = true; }
+  }).toDestination();
+  sampler.volume.value = S.volume;
+}
+const held = new Map();
+function noteOn(midi, vel, hand, f){
+  held.set(midi, (held.get(midi)||0) + 1); lastNoteOnMs = performance.now();
+  if (audioReady){ try { sampler.triggerAttack(Tone.Frequency(midi,'midi').toNote(), Tone.now(), vel); } catch(e){} }
+  pianoKey(midi, true, hand, f);
+  $('ltNote').textContent = noteLabel(midi) || midiName(midi);
+  $('ltWho').textContent = (hand === 'mouse' ? 'rato' : HAND_NAMES[hand] + (f === null ? '' : ` · dedo ${f+1} (${FINGER_NAMES[f]})`)) + ` · força ${Math.round(vel*100)}%`;
+  addLog(`▼ ${midiName(midi)} · ${hand === 'mouse' ? 'rato' : (hand === 'R' ? 'Dir' : 'Esq') + (f === null ? '' : ' ' + (f+1))} · ${Math.round(vel*100)}%`, f !== null ? FINGER_COLORS[f] : null);
+  practiceOnPress(midi, hand, f);
+}
+function noteOff(midi){
+  const n = (held.get(midi)||1) - 1; held.set(midi, n);
+  if (n <= 0){ held.delete(midi); if (audioReady){ try { sampler.triggerRelease(Tone.Frequency(midi,'midi').toNote(), Tone.now()); } catch(e){} } }
+  pianoKey(midi, false);
+}
+
+// ---------- 9. Teclado no ecrã ----------
+let keyEls = {}, fdots = { L:[], R:[] };
+function updateDots(){
+  if (rzOn()){   // modo rasante: pontas no ar (pequenas) e dedos pousados (com brilho)
+    const all = store.rz ? [...rz.touches.map(q => ({ a:q.a, on:!!q.snd, black:q.black, f:q.f })), ...rz.hovers.map(q => ({ a:q.a, on:false, f:q.f }))] : [];
+    [...fdots.R, ...fdots.L].forEach((d, i) => {
+      const q = all[i]; if (!q || q.a == null || q.a < -KW || q.a > PW + KW){ d.style.display = 'none'; return; }
+      d.style.display = 'block'; d.style.background = q.f != null ? FINGER_COLORS[q.f] : AQ_HI; d.style.left = clamp(q.a/PW, 0, 1)*100 + '%'; d.style.top = (q.black ? 30 : 80) + '%'; d.classList.toggle('on', q.on);
+    });
+    return;
+  }
+  for (const id of ['L','R']){
+    const hs = hands[id];
+    fdots[id].forEach((d, f) => {
+      d.style.background = FINGER_COLORS[f];
+      const fs = hs.fingers[f], c = hs.pts && fs.tc;
+      if (!c || c[0] < -KW || c[0] > PW + KW || c[1] < -0.3*KL || c[1] > 1.4*KL){ d.style.display = 'none'; return; }
+      d.style.display = 'block'; d.style.left = clamp(c[0]/PW, 0, 1)*100 + '%'; d.style.top = clamp(c[1]/KL, 0.04, 0.96)*100 + '%'; d.classList.toggle('on', fs.state === 'down' || fs.duo != null);
+    });
+  }
+}
+function buildPiano(){
+  const el = $('piano'); el.innerHTML = ''; keyEls = {};
+  const ww = 100/NWHITE; let wi = 0;
+  for (let m = LOW; m <= HIGH; m++){
+    const d = document.createElement('div'), blk = isBlack(m);
+    d.className = 'key ' + (blk ? 'black' : 'white');
+    if (blk){ d.style.left = (wi*ww - ww*0.31) + '%'; d.style.width = (ww*0.62) + '%'; }
+    else { d.style.left = (wi*ww) + '%'; d.style.width = ww + '%'; wi++; }
+    d.innerHTML = `<span class="badge"></span><span>${noteLabel(m)}</span>`;
+    d.addEventListener('pointerdown', e => { e.preventDefault(); initAudio(); noteOn(m, 0.7, 'mouse', null); d._mouse = true; });
+    const up = () => { if (d._mouse){ d._mouse = false; noteOff(m); } };
+    d.addEventListener('pointerup', up); d.addEventListener('pointerleave', up);
+    el.appendChild(d); keyEls[m] = d;
+  }
+  fdots = { L:[], R:[] };
+  for (const id of ['L','R']) for (let f = 0; f < 5; f++){ const d = document.createElement('div'); d.className = 'fdot'; d.style.background = FINGER_COLORS[f]; el.appendChild(d); fdots[id].push(d); }
+  lastExpected = '~'; markExpected();
+}
+function pianoKey(midi, on, hand, f){
+  const d = keyEls[midi]; if (!d) return;
+  const b = d.querySelector('.badge');
+  if (on){ d.classList.add('on'); b.textContent = hand === 'mouse' ? '' : (hand === 'R' ? 'D' : 'E') + (f === null || f === undefined ? '' : f+1); b.style.background = f !== null && f !== undefined ? FINGER_COLORS[f] : 'none'; }
+  else if (!held.has(midi)){ d.classList.remove('on'); b.textContent = ''; b.style.background = 'none'; }
+}
+function keySpan(midi){
+  const ww = 1/NWHITE; let wi = 0;
+  for (let m = LOW; m < midi; m++) if (!isBlack(m)) wi++;
+  return isBlack(midi) ? [wi*ww - ww*0.31, ww*0.62] : [wi*ww, ww];
+}
+
+// ---------- 10. Prática ----------
+// Modo "Esperar": o tempo para na nota até a tocares. Modo "Livre": as notas descem sempre; acertas se tocares a tempo.
+const HIT_WIN = 0.4;
+const practice = { name:'', groups:[], gi:0, time:0, playing:false, waiting:false, pps:120, stats:{ ok:0, wrong:0, miss:0, fOk:0, fTot:0 }, folded:false, done:false };
+function foldMidi(m){ let x = m; while (x < LOW) x += 12; while (x > HIGH) x -= 12; if (x !== m) practice.folded = true; return x; }
+function loadSong(notes, name){
+  practice.folded = false;
+  const ns = notes.map(n => ({ ...n, midi: foldMidi(n.midi), done:false, miss:false })).sort((a,b) => a.time - b.time || a.midi - b.midi);
+  const groups = [];
+  for (const n of ns){
+    const g = groups[groups.length-1];
+    if (g && n.time - g.time < 0.06){ if (!g.notes.some(x => x.midi === n.midi)) g.notes.push(n); }
+    else groups.push({ time:n.time, notes:[n] });
+  }
+  Object.assign(practice, { name, groups, playing:false });
+  resetPractice();
+  $('scTitle').textContent = name; $('songCard').style.display = 'block'; $('fallWrap').style.display = 'block';
+  closePops(); renderSongCard(); resizeCanvases();
+}
+function closeSong(){
+  Object.assign(practice, { groups:[], playing:false }); $('songCard').style.display = 'none'; $('fallWrap').style.display = 'none'; markExpected();
+}
+function resetPractice(){
+  practice.groups.forEach(g => g.notes.forEach(n => { n.done = false; n.miss = false; }));
+  practice.gi = 0; practice.waiting = false; practice.done = false;
+  practice.time = practice.groups.length ? practice.groups[0].time - 2.5 : 0;
+  practice.stats = { ok:0, wrong:0, miss:0, fOk:0, fTot:0 }; renderSongCard(); markExpected();
+}
+function renderSongCard(){
+  $('modeFree').classList.toggle('on', S.mode === 'free'); $('modeWait').classList.toggle('on', S.mode === 'wait');
+  $('scMode').textContent = S.mode === 'free' ? 'Livre: as notas descem ao ritmo da música.' : 'Esperar: a música só avança quando tocas a nota certa.';
+  $('scPlay').textContent = practice.playing ? 'Pausar' : (practice.done ? 'Tocar outra vez' : 'Iniciar');
+  const s = practice.stats;
+  $('scStats').textContent = `Certas ${s.ok} · Erradas ${s.wrong}` + (S.mode === 'free' ? ` · Falhadas ${s.miss}` : '') + (s.fTot ? ` · Dedilhação ${Math.round(100*s.fOk/s.fTot)}%` : '') + (practice.folded ? ' · transposta' : '');
+}
+const baseC = () => (60 >= LOW && 72 <= HIGH) ? 60 : LOW;
+function exScale(){
+  const b = baseC(), up = [0,2,4,5,7,9,11,12], fu = [1,2,3,1,2,3,4,5], dn = [11,9,7,5,4,2,0], fd = [4,3,2,1,3,2,1];
+  const notes = []; let t = 0;
+  up.forEach((o,i) => { notes.push({ midi:b+o, time:t, dur:0.5, finger:fu[i], hand:'R' }); t += 0.7; });
+  dn.forEach((o,i) => { notes.push({ midi:b+o, time:t, dur:0.5, finger:fd[i], hand:'R' }); t += 0.7; });
+  loadSong(notes, 'Escala de Dó maior · mão direita');
+}
+function exFive(){
+  const b = baseC(), os = [0,2,4,5,7,5,4,2,0], fs = [1,2,3,4,5,4,3,2,1];
+  loadSong(os.map((o,i) => ({ midi:b+o, time:i*0.7, dur:0.5, finger:fs[i], hand:'R' })), '5 dedos C‑D‑E‑F‑G · mão direita');
+}
+function exChord(){
+  const b = baseC(), notes = [];
+  for (let r = 0; r < 4; r++) [[0,1],[4,3],[7,5]].forEach(([o,f]) => notes.push({ midi:b+o, time:r*1.6, dur:1.0, finger:f, hand:'R' }));
+  loadSong(notes, 'Acorde de Dó maior · mão direita');
+}
+function exTest(){   // pequena melodia original de arpejos, com teclas brancas e pretas
+  const b = baseC(), os = [0,4,7,12, 9,5,2,5, 4,8,11,8, 7,3,0,3, 0,4,7,12];
+  loadSong(os.map((o,i) => ({ midi:b+o, time:i*0.55, dur:0.45 })), 'Melodia de teste');
+}
+async function loadMidiFile(file){
+  const MidiCtor = window.Midi?.Midi || window.Midi;
+  const midi = new MidiCtor(await file.arrayBuffer());
+  const notes = [];
+  midi.tracks.forEach(tr => tr.notes.forEach(n => notes.push({ midi:n.midi, time:n.time, dur:n.duration })));
+  if (!notes.length){ banner('O ficheiro MIDI não tem notas.', 3000); return; }
+  loadSong(notes, file.name.replace(/\.midi?$/i, ''));
+}
+function practiceTick(dt){
+  if (!practice.playing || practice.done) return;
+  const g = practice.groups[practice.gi];
+  if (!g){
+    if (S.mode === 'free' && practice.groups.length && practice.time < practice.groups[practice.groups.length-1].time + 1){ practice.time += dt*S.speed; return; }
+    practice.done = true; practice.playing = false; showFeedback('Fim da música', 'var(--aq-hi)'); renderSongCard(); markExpected(); return;
+  }
+  if (S.mode === 'wait'){
+    if (!practice.waiting){ practice.time += dt*S.speed; if (practice.time >= g.time){ practice.time = g.time; practice.waiting = true; markExpected(); } }
+  } else {
+    practice.time += dt*S.speed;
+    let changed = false;
+    while (practice.groups[practice.gi] && practice.time > practice.groups[practice.gi].time + HIT_WIN){
+      practice.groups[practice.gi].notes.forEach(n => { if (!n.done){ n.miss = true; practice.stats.miss++; } }); practice.gi++; changed = true;
+    }
+    if (changed){ renderSongCard(); }
+    markExpected();
+  }
+}
+function practiceOnPress(midi, hand, f){
+  if (!practice.playing || practice.done) return;
+  let g = practice.groups[practice.gi]; if (!g) return;
+  let n = null;
+  if (S.mode === 'wait'){
+    if (!practice.waiting && g.time - practice.time > 0.35) return;
+    n = g.notes.find(x => x.midi === midi && !x.done);
+  } else {
+    for (let i = practice.gi; i < practice.groups.length && practice.groups[i].time - practice.time <= HIT_WIN; i++){
+      const c = practice.groups[i].notes.find(x => x.midi === midi && !x.done && !x.miss);
+      if (c){ n = c; g = practice.groups[i]; break; }
+    }
+    if (!n && g.time - practice.time > HIT_WIN) return;   // ainda não há notas na zona de toque
+  }
+  if (!n){
+    practice.stats.wrong++;
+    showFeedback(`✗ ${noteLabel(midi) || midiName(midi)} — esperado ${g.notes.filter(x => !x.done).map(x => noteLabel(x.midi) || midiName(x.midi)).join(', ')}`, 'var(--bad)');
+  } else {
+    n.done = true; practice.stats.ok++;
+    let msg = `✓ ${noteLabel(midi) || midiName(midi)}`, col = 'var(--aq-hi)';
+    if (n.finger && hand !== 'mouse' && f !== null){
+      practice.stats.fTot++;
+      if ((f+1) === n.finger && (!n.hand || n.hand === hand)){ practice.stats.fOk++; msg += ` · dedo ${n.finger} ✓`; }
+      else { msg += ` · dedo ✗ (era ${n.hand === 'L' ? 'esq.' : 'dir.'} ${n.finger})`; col = 'var(--warn)'; }
+    }
+    showFeedback(msg, col);
+    if (S.mode === 'wait' && g.notes.every(x => x.done)){ practice.gi++; practice.waiting = false; practice.time = Math.max(practice.time, g.time); }
+  }
+  renderSongCard(); markExpected();
+}
+function expectedSet(){
+  const m = new Set(), g = practice.groups[practice.gi];
+  if (g && practice.playing && (S.mode === 'wait' || g.time - practice.time < 0.6)) g.notes.forEach(n => { if (!n.done) m.add(n.midi); });
+  return m;
+}
+let lastExpected = '';
+function markExpected(){
+  const set = expectedSet(), sig = [...set].join(',');
+  if (sig === lastExpected) return; lastExpected = sig;
+  Object.entries(keyEls).forEach(([m, d]) => d.classList.toggle('expected', set.has(+m)));
+}
+let fbTimer = null;
+function showFeedback(msg, col){
+  const el = $('feedback'); el.style.display = 'block'; el.style.color = col; el.textContent = msg;
+  clearTimeout(fbTimer); fbTimer = setTimeout(() => el.style.display = 'none', 1800);
+}
+
+// ---------- 11. Desenho ----------
+const view = $('view'), vctx = view.getContext('2d'), video = $('video');
+// No modo rasante a vista é escolhida automaticamente para os graves ficarem à esquerda do ecrã, como no teclado de baixo.
+const flips = () => rzOn() ? { fx: !(store.rz && store.rz.flip), fy:false } : { fx: S.view !== 'raw', fy: S.view === 'player' };
+const toDisp = (x, y) => { const { fx, fy } = flips(); return [fx ? vw - x : x, fy ? vh - y : y]; };
+let adjusting = false, drag = null;
+
+function drawOverlay(){
+  const c = vctx, { fx, fy } = flips();
+  c.save(); c.translate(fx ? vw : 0, fy ? vh : 0); c.scale(fx ? -1 : 1, fy ? -1 : 1); c.drawImage(video, 0, 0, vw, vh); c.restore();
+  if (S.darken > 0){ c.fillStyle = `rgba(1,10,9,${S.darken})`; c.fillRect(0, 0, vw, vh); }
+  const lw = Math.max(1, vw/900);
+
+  // Piano na mesa: contornos com brilho
+  if (rzOn()) drawRz(c, lw);
+  if (!rzOn() && piano && (S.showTable || adjusting)){
+    const P = (x, y) => toDisp(...applyH(piano.H, x, y));
+    const quad = k => [P(k.x0,k.y0), P(k.x1,k.y0), P(k.x1,k.y1), P(k.x0,k.y1)];
+    const path = q => { c.moveTo(q[0][0], q[0][1]); for (let i = 1; i < 4; i++) c.lineTo(q[i][0], q[i][1]); c.closePath(); };
+    const tint = new Map();
+    for (const m of expectedSet()) tint.set(m, 'rgba(234,250,247,0.42)');
+    for (const hs of Object.values(hands)) hs.fingers.forEach(fs => { if (hs.pts && fs.hoverKey && !tint.has(fs.hoverKey.midi)) tint.set(fs.hoverKey.midi, 'rgba(21,160,147,0.22)'); });
+    for (const hs of Object.values(hands)) hs.fingers.forEach(fs => { if (fs.state === 'down' && fs.midi !== null) tint.set(fs.midi, 'rgba(44,199,184,0.85)'); else if (fs.duo != null) tint.set(fs.duo, 'rgba(44,199,184,0.85)'); });
+    const quads = KEYS.map(quad);
+    for (const black of [false, true]){
+      KEYS.forEach((k, i) => { if (k.black === black){ c.beginPath(); path(quads[i]); c.fillStyle = tint.get(k.midi) || (black ? 'rgba(2,14,13,0.8)' : 'rgba(21,160,147,0.05)'); c.fill(); } });
+      c.beginPath(); KEYS.forEach((k, i) => { if (k.black === black) path(quads[i]); });
+      c.shadowColor = AQ_HI; c.shadowBlur = 10*lw; c.strokeStyle = AQ_HI; c.lineWidth = 1.4*lw; c.stroke(); c.shadowBlur = 0;
+    }
+    if (S.labels !== 'none'){
+      c.textAlign = 'center'; c.textBaseline = 'middle';
+      KEYS.forEach(k => {
+        const y = k.black ? BL*0.82 : KL*0.9, a = P(k.x0, y), b = P(k.x1, y), w = Math.hypot(a[0]-b[0], a[1]-b[1]), t = noteLabel(k.midi);
+        const fsz = Math.min(15*lw, w/(t.length*0.6)); if (fsz < 5) return;
+        c.font = `600 ${fsz}px Inter, system-ui`; c.fillStyle = tint.has(k.midi) && tint.get(k.midi).startsWith('rgba(44') ? '#021110' : '#d8efec';
+        c.fillText(t, (a[0]+b[0])/2, (a[1]+b[1])/2);
+      });
+    }
+    if (adjusting){ const p = P(PW/2, KL*0.45); boxText('Arrasta para mover o piano', p[0], p[1], 14*lw); }
+  }
+  // Mãos
+  for (const hs of Object.values(hands)){
+    if (!hs.pts) continue;
+    const Pd = hs.pts.map(p => toDisp(p[0], p[1]));
+    c.strokeStyle = 'rgba(216,239,236,0.55)'; c.lineWidth = 1.5*lw; c.beginPath();
+    for (const [a,b] of CONNECTIONS){ c.moveTo(Pd[a][0], Pd[a][1]); c.lineTo(Pd[b][0], Pd[b][1]); } c.stroke();
+    hs.fingers.forEach((fs, f) => {
+      const [x,y] = Pd[TIPS[f]], col = FINGER_COLORS[f];
+      if (fs.state === 'down' || fs.duo != null){ c.shadowColor = AQ_HI; c.shadowBlur = 18*lw; c.beginPath(); c.arc(x, y, 14*lw, 0, Math.PI*2); c.strokeStyle = AQ_HI; c.lineWidth = 3.5*lw; c.stroke(); c.shadowBlur = 0; }
+      else if (fs.near && fs.h !== null){ c.beginPath(); c.arc(x, y, 11*lw, 0, Math.PI*2); c.strokeStyle = 'rgba(44,199,184,0.8)'; c.lineWidth = 1.5*lw; c.stroke(); }
+      c.beginPath(); c.arc(x, y, 7.5*lw, 0, Math.PI*2); c.fillStyle = col; c.fill();
+      c.font = `700 ${10*lw}px Inter, system-ui`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillStyle = '#021110'; c.fillText(String(f+1), x, y + 0.5);
+      if (S.showDebug && fs.h !== null){ c.font = `600 ${11*lw}px Inter, system-ui`; c.fillStyle = '#eafaf7'; c.fillText(Math.round(fs.h) + ' mm', x, y - 16*lw); }
+    });
+    boxText(hs.id === 'L' ? 'ESQUERDA' : 'DIREITA', Pd[0][0], Pd[0][1] + 22*lw*(fy ? -1 : 1), 11*lw);
+  }
+  function boxText(t, x, y, size){
+    c.font = `600 ${size}px Inter, system-ui`; c.textAlign = 'center'; c.textBaseline = 'middle';
+    const w = c.measureText(t).width + size; c.fillStyle = 'rgba(2,14,13,0.75)'; c.fillRect(x - w/2, y - size*0.85, w, size*1.7);
+    c.fillStyle = '#d8efec'; c.fillText(t, x, y);
+  }
+}
+
+// Desenho do modo rasante: linha de contacto, teclas marcadas sobre a mesa, dedos pousados e pontas no ar.
+function drawRz(c, lw){
+  const cal = store.rz;
+  if (!cal){ return; }
+  const D = (x, y) => toDisp(x/rz.sc, y/rz.sc), g = rzGeom(), ly = x => cal.a*x + cal.b, kh = Math.max(20, Math.min(3*0.95*g.keyPx, rz.H - 4 - ly(RZW/2))), bmode = rzBlackMode();
+  const lit = new Map(); for (const m of expectedSet()) lit.set(m, 'rgba(234,250,247,0.45)');
+  for (const h of rz.hovers) if (h.midi != null && !lit.has(h.midi)) lit.set(h.midi, 'rgba(21,160,147,0.25)');
+  for (const m of rz.active.keys()) lit.set(m, 'rgba(44,199,184,0.85)');
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  const showKeys = S.rzShow2 !== 'balls', showLine = S.rzShow2 === 'all';
+  for (const black of [false, true]){
+    for (const k of KEYS){
+      if (!showKeys) break;
+      if (k.black !== black) continue;
+      if (black && bmode === 'off') continue;
+      const kc = (k.x0 + k.x1)/2, hw = black && bmode === 'lateral' ? S.rzBlackHalf : (k.x1 - k.x0)/2;
+      const xa = rzKeyX(kc - hw), xb = rzKeyX(kc + hw); if (Math.max(xa, xb) < 0 || Math.min(xa, xb) > RZW) continue;
+      const y0 = ly(RZW/2) + 2, hgt = black ? 0.55*kh : kh, p0 = D(xa, y0), p1 = D(xb, y0 + hgt);
+      const X = Math.min(p0[0], p1[0]), Y = Math.min(p0[1], p1[1]), Wd = Math.abs(p1[0]-p0[0]), Hd = Math.abs(p1[1]-p0[1]);
+      c.fillStyle = lit.get(k.midi) || (black ? 'rgba(2,14,13,0.85)' : 'rgba(21,160,147,0.06)'); c.fillRect(X, Y, Wd, Hd);
+      c.shadowColor = AQ_HI; c.shadowBlur = 8*lw; c.strokeStyle = AQ_HI; c.lineWidth = 1.3*lw; c.strokeRect(X, Y, Wd, Hd); c.shadowBlur = 0;
+      const t = noteLabel(k.midi); if (t){ const fsz = Math.min(14*lw, Wd/(t.length*0.6)); if (fsz >= 5){ c.font = `600 ${fsz}px Inter, system-ui`; c.fillStyle = '#d8efec'; c.fillText(t, X + Wd/2, flips().fy ? Y + fsz : Y + Hd - fsz); } }
+    }
+  }
+  // linha de contacto
+  const a0 = D(0, ly(0)), a1 = D(RZW, ly(RZW));
+  if (showLine){ c.shadowColor = AQ_HI; c.shadowBlur = 10*lw; c.strokeStyle = AQ_HI; c.lineWidth = 1.5*lw; c.beginPath(); c.moveTo(a0[0], a0[1]); c.lineTo(a1[0], a1[1]); c.stroke(); c.shadowBlur = 0; }
+  // contorno de baixo da pele (diagnóstico)
+  if (S.showDebug && rz.yl){ c.fillStyle = '#ff7a6b'; for (let x = 0; x < RZW; x += 2) if (rz.yl[x] >= 0){ const p = D(x, rz.yl[x] + rz.yTop); c.fillRect(p[0]-1, p[1]-1, 2.5*lw, 2.5*lw); } }
+  const tag = (m, x, y) => { if (showKeys || m == null) return; const t = noteLabel(m) || midiName(m); c.font = `600 ${12*lw}px Inter, system-ui`; c.fillStyle = '#eafaf7'; c.fillText(t, x, y + 20*lw); };
+  const num = (f, x, y) => { c.font = `700 ${10*lw}px Inter, system-ui`; c.fillStyle = '#021110'; c.fillText(String(f+1), x, y + 0.5); };
+  for (const h of rz.hovers){
+    const p = D(h.x, h.y != null ? h.y : ly(h.x) - h.gap);
+    c.beginPath(); c.arc(p[0], p[1], 7.5*lw, 0, Math.PI*2);
+    if (h.f != null){ c.fillStyle = FINGER_COLORS[h.f]; c.fill(); num(h.f, p[0], p[1]); }
+    else { c.strokeStyle = 'rgba(216,239,236,0.9)'; c.lineWidth = 1.5*lw; c.stroke(); }
+    tag(h.midi, p[0], p[1]);
+  }
+  for (const q of rz.touches){ const p = D(q.xs, ly(q.xs) + q.pens); c.beginPath(); c.arc(p[0], p[1], 9*lw, 0, Math.PI*2);
+    if (q.snd){ c.shadowColor = AQ_HI; c.shadowBlur = 18*lw; c.fillStyle = q.f != null ? FINGER_COLORS[q.f] : AQ_HI; c.fill(); c.shadowBlur = 0; c.strokeStyle = '#eafaf7'; c.lineWidth = 2*lw; c.stroke(); if (q.f != null) num(q.f, p[0], p[1]); } else { c.strokeStyle = AQ; c.lineWidth = 2.5*lw; c.stroke(); }
+    if (S.showDebug){ c.font = `600 ${11*lw}px Inter, system-ui`; c.fillStyle = '#eafaf7'; c.fillText(q.pens.toFixed(1) + ' px', p[0], p[1] - 16*lw); }
+    tag(q.midi, p[0], p[1]); }
+}
+
+// Gráfico de diagnóstico: altura de cada ponta de dedo (mm) ao longo do tempo.
+const dbg = { L:[[],[],[],[],[]], R:[[],[],[],[],[]] }, dbgEvents = [];
+let lastFrameT = 0;
+function pushDebug(h, f, t, v){ const a = dbg[h][f]; a.push([t, v]); while (a.length && t - a[0][0] > 6) a.shift(); }
+function drawGraph(){
+  while (dbgEvents.length && lastFrameT - dbgEvents[0].t > 6) dbgEvents.shift();
+  if (!S.showDebug) return;
+  const cv = $('graph'), g = cv.getContext('2d'), W = cv.width, H = cv.height, dpr = devicePixelRatio || 1;
+  g.clearRect(0, 0, W, H);
+  const span = 5, vMin = -15, vMax = 70, ph = H/2;
+  ['L','R'].forEach((h, pi) => {
+    const y0 = pi*ph, X = t => W - (lastFrameT - t)/span*W, Y = v => y0 + ph - (clamp(v, vMin, vMax) - vMin)/(vMax - vMin)*ph;
+    g.strokeStyle = 'rgba(21,160,147,0.6)'; g.lineWidth = dpr; g.beginPath(); g.moveTo(0, Y(hands[h].floor)); g.lineTo(W, Y(hands[h].floor)); g.stroke();
+    g.setLineDash([6*dpr, 4*dpr]); g.strokeStyle = 'rgba(134,170,165,0.7)'; g.beginPath(); g.moveTo(0, Y(hands[h].floor + S.touchMm)); g.lineTo(W, Y(hands[h].floor + S.touchMm)); g.stroke(); g.setLineDash([]);
+    g.fillStyle = '#86aaa5'; g.font = `${11*dpr}px Inter, system-ui`; g.textAlign = 'left';
+    g.fillText(`${HAND_NAMES[h]} · altura (mm) · linha cheia = mesa · tracejado = zona de toque`, 8*dpr, y0 + 14*dpr);
+    dbg[h].forEach((arr, f) => {
+      if (arr.length < 2) return;
+      g.strokeStyle = FINGER_COLORS[f]; g.lineWidth = 1.5*dpr; g.beginPath();
+      arr.forEach(([t,v], i) => i ? g.lineTo(X(t), Y(v)) : g.moveTo(X(t), Y(v))); g.stroke();
+    });
+    for (const e of dbgEvents){
+      if (e.hand !== h) continue;
+      const x = X(e.t), y = Y(e.h), col = FINGER_COLORS[e.f];
+      if (e.type === 'press'){ g.fillStyle = col; g.beginPath(); g.moveTo(x-6*dpr, y-11*dpr); g.lineTo(x+6*dpr, y-11*dpr); g.lineTo(x, y-1); g.closePath(); g.fill(); }
+      else if (e.type === 'release'){ g.strokeStyle = col; g.lineWidth = 1.5*dpr; g.beginPath(); g.arc(x, y, 4*dpr, 0, Math.PI*2); g.stroke(); }
+      else { g.strokeStyle = '#86aaa5'; g.lineWidth = 1.5*dpr; g.beginPath(); g.moveTo(x-4*dpr, y-4*dpr); g.lineTo(x+4*dpr, y+4*dpr); g.moveTo(x+4*dpr, y-4*dpr); g.lineTo(x-4*dpr, y+4*dpr); g.stroke(); }
+    }
+  });
+}
+// Notas a cair sobre o teclado
+function drawFall(){
+  if (!practice.groups.length) return;
+  const cv = $('fall'), g = cv.getContext('2d'), W = cv.width, H = cv.height, dpr = devicePixelRatio || 1;
+  g.clearRect(0, 0, W, H);
+  const grd = g.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, 'rgba(2,11,10,0)'); grd.addColorStop(0.35, 'rgba(2,11,10,0.72)'); grd.addColorStop(1, 'rgba(2,11,10,0.9)');
+  g.fillStyle = grd; g.fillRect(0, 0, W, H);
+  const pps = practice.pps*dpr, hitY = H - 2*dpr;
+  for (const grp of practice.groups) for (const n of grp.notes){
+    const yb = hitY - (n.time - practice.time)*pps, yt = yb - Math.max(16*dpr, n.dur*pps*0.85);
+    if (yt > H || yb < 0) continue;
+    const [fx, fw] = keySpan(n.midi), x = fx*W + 2*dpr, w = fw*W - 4*dpr, r = Math.min(6*dpr, w/2);
+    g.globalAlpha = n.done ? 0.25 : (n.miss ? 0.35 : 1);
+    g.beginPath(); g.moveTo(x+r, yt); g.arcTo(x+w, yt, x+w, yb, r); g.arcTo(x+w, yb, x, yb, r); g.arcTo(x, yb, x, yt, r); g.arcTo(x, yt, x+w, yt, r); g.closePath();
+    g.fillStyle = n.miss ? 'rgba(255,122,107,0.25)' : 'rgba(21,160,147,0.28)'; g.fill();
+    g.shadowColor = n.miss ? '#ff7a6b' : AQ_HI; g.shadowBlur = 10*dpr; g.strokeStyle = n.miss ? '#ff7a6b' : AQ_HI; g.lineWidth = 1.5*dpr; g.stroke(); g.shadowBlur = 0;
+    if (w > 12*dpr){
+      g.fillStyle = n.finger ? FINGER_COLORS[n.finger-1] : '#d8efec'; g.textAlign = 'center';
+      const t = n.finger ? String(n.finger) : (noteLabel(n.midi) || ''), fsz = Math.min(11*dpr, w/(Math.max(1,t.length)*0.62));
+      g.font = `700 ${fsz}px Inter, system-ui`; g.fillText(t, x + w/2, yb - 6*dpr);
+    }
+    g.globalAlpha = 1;
+  }
+  g.fillStyle = practice.waiting ? '#eafaf7' : AQ; g.fillRect(0, hitY - dpr, W, 3*dpr);
+}
+function resizeCanvases(){
+  const dpr = devicePixelRatio || 1;
+  for (const id of ['graph','fall']){ const c = $(id), r = c.getBoundingClientRect(); if (r.width){ c.width = Math.round(r.width*dpr); c.height = Math.round(r.height*dpr); } }
+}
+
+// ---------- 12. Câmara e ciclo principal ----------
+let landmarker = null, stream = null, looping = false, lastTs = 0;
+let fpsCount = 0, fpsT = performance.now(), inferEMA = 0, fpsNow = 0;
+async function initLandmarker(){
+  $('stageMsg').textContent = 'A carregar o modelo de deteção das mãos…';
+  const fileset = await FilesetResolver.forVisionTasks(WASM_URL);
+  const opts = d => ({ baseOptions:{ modelAssetPath:MODEL_URL, delegate:d }, runningMode:'VIDEO', numHands:2,
+                       minHandDetectionConfidence:0.35, minHandPresenceConfidence:0.35, minTrackingConfidence:0.35 });
+  try { landmarker = await HandLandmarker.createFromOptions(fileset, opts('GPU')); }
+  catch(e){ console.warn('GPU indisponível, a usar CPU', e); landmarker = await HandLandmarker.createFromOptions(fileset, opts('CPU')); }
+}
+async function startCamera(){
+  initAudio().catch(()=>{});
+  try {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    const v = { width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:60 } };
+    if (S.deviceId) v.deviceId = { exact:S.deviceId };
+    stream = await navigator.mediaDevices.getUserMedia({ video:v, audio:false });
+    video.srcObject = stream; await video.play();
+    vw = video.videoWidth; vh = video.videoHeight; view.width = vw; view.height = vh; updateCam();
+    await listDevices(); computePiano();
+    if (!landmarker) await initLandmarker();
+    $('stageMsg').style.display = 'none';
+    startLoop(); renderWizard();
+    if (!piano && store.wizardDone) banner('Mesa por calibrar — clica em “Calibrar mesa”.', 5000);
+  } catch(e){
+    console.error(e); stream = null; $('stageMsg').style.display = 'flex'; renderCalStatus();
+    $('stageMsg').textContent = 'Não foi possível abrir a câmara (' + (e.name || e.message || e) + '). Verifica a permissão da câmara no Chrome e no sistema, e abre a página por http://localhost.';
+  }
+}
+async function listDevices(){
+  const ds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  $('devSel').innerHTML = '<option value="">Câmara predefinida</option>' + ds.map((d,i) => `<option value="${d.deviceId}">${d.label || 'Câmara ' + (i+1)}</option>`).join('');
+  $('devSel').value = S.deviceId;
+}
+function startLoop(){
+  if (looping) return; looping = true;
+  if ('requestVideoFrameCallback' in HTMLVideoElement.prototype){
+    const cb = (now, meta) => { onFrame(meta); video.requestVideoFrameCallback(cb); };
+    video.requestVideoFrameCallback(cb);
+  } else {
+    let last = -1; const f = () => { if (video.currentTime !== last){ last = video.currentTime; onFrame(null); } requestAnimationFrame(f); }; requestAnimationFrame(f);
+  }
+}
+function onFrame(meta){
+  if (video.readyState < 2) return;
+  if (video.videoWidth !== vw){ vw = video.videoWidth; vh = video.videoHeight; view.width = vw; view.height = vh; updateCam(); computePiano(); }
+  const t0 = performance.now();
+  if (rzOn()){   // câmara rasante: não usa o MediaPipe
+    const capR = meta && meta.captureTime ? meta.captureTime : t0;
+    lastFrameT = capR/1000; rzSize();
+    // Reconhecimento dos dedos (quando a câmara os consegue ver): serve para pôr as bolas nas pontas reais e saber qual dedo tocou.
+    if (landmarker){ let ts = Math.round(t0); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; try { processResults(landmarker.detectForVideo(video, ts), lastFrameT); } catch(e){ console.warn(e); } }
+    try { rzFrame(lastFrameT); } catch(e){ console.warn(e); }
+    drawOverlay(); updateDots();
+    const t2 = performance.now(); inferEMA = inferEMA ? 0.9*inferEMA + 0.1*(t2 - t0) : t2 - t0; fpsCount++;
+    if (t2 - fpsT > 1000){ fpsNow = Math.round(fpsCount*1000/(t2 - fpsT)); fpsCount = 0; fpsT = t2; const txt = `${fpsNow} FPS · análise ${inferEMA.toFixed(0)} ms · câmara ${vw}×${vh} · dedos reconhecidos: ${rz.mp ? 'sim' : 'não (a usar só a cor da pele)'}`; $('perf').textContent = txt; $('camInfo').textContent = txt; }
+    return;
+  }
+  if (!landmarker) return;
+  let ts = Math.round(t0); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts;
+  let res = null;
+  try { res = landmarker.detectForVideo(video, ts); } catch(e){ console.warn(e); }
+  const t1 = performance.now();
+  inferEMA = inferEMA ? 0.9*inferEMA + 0.1*(t1 - t0) : t1 - t0;
+  const capT = meta && meta.captureTime ? meta.captureTime : (meta && meta.presentationTime ? meta.presentationTime : t0);
+  lastFrameT = capT/1000;
+  processResults(res, lastFrameT);
+  drawOverlay(); updateDots();
+  fpsCount++;
+  if (t1 - fpsT > 1000){
+    fpsNow = Math.round(fpsCount*1000/(t1 - fpsT)); fpsCount = 0; fpsT = t1;
+    const st = stream ? stream.getVideoTracks()[0].getSettings() : {};
+    const txt = `${fpsNow} FPS · inferência ${inferEMA.toFixed(0)} ms · câmara ${vw}×${vh}`;
+    $('perf').textContent = txt + (fpsNow < 24 ? ' — FPS baixos: mais luz na mesa ajuda.' : '') + (mic.on ? ` · microfone: ${mic.count} pancadas ouvidas` : '');
+    $('camInfo').textContent = txt + (st.frameRate ? ` @ ${Math.round(st.frameRate)}` : '');
+  }
+}
+let uiLast = performance.now();
+function uiLoop(now){
+  const dt = Math.min(0.1, (now - uiLast)/1000); uiLast = now;
+  micTick(now); practiceTick(dt); drawFall(); drawGraph(); if (duoOn()) duoSend(now);
+  requestAnimationFrame(uiLoop);
+}
+
+// ---------- UI ----------
+function addLog(msg, col){
+  const el = $('log'), d = document.createElement('div'); d.textContent = msg; if (col) d.style.color = col;
+  el.prepend(d); while (el.children.length > 40) el.lastChild.remove();
+}
+function closePops(){ document.querySelectorAll('.pop').forEach(p => p.classList.remove('on')); document.querySelectorAll('.nav').forEach(b => b.classList.remove('on')); }
+function togglePop(name){
+  const p = $('pop-' + name), was = p.classList.contains('on'); closePops();
+  if (!was){ p.classList.add('on'); const b = document.querySelector(`.nav[data-pop="${name}"]`); b.classList.add('on'); p.style.left = Math.max(16, Math.min(b.getBoundingClientRect().left, innerWidth - 376)) + 'px'; }
+}
+// [alvo, chave, nome, min, max, passo, formato, efeito]
+const tweakSlider = (k, name, mn, mx, st, fmt) => ['pianoSliders', 'tweak.' + k, name, mn, mx, st, fmt, () => computePiano()];
+const SLIDERS = [
+  ['camSliders','fov','Campo de visão da câmara', 45, 100, 1, v => v+'°', () => { updateCam(); computePiano(); }],
+  ['camSliders','darken','Escurecer a imagem', 0, 0.8, 0.05, v => Math.round(v*100)+'%'],
+  ['rzSliders','rzTauMm','Rasante: distância à mesa que conta como toque', 0.5, 6, 0.25, v => v+' mm'],
+  ['rzSliders','strikeMm','Rasante: altura mínima da batida', 1, 12, 0.5, v => v+' mm'],
+  ['rzSliders','rzBlackHalf','Rasante: meia-largura das pretas (modo entre as brancas)', 3, 8, 0.5, v => v+' mm'],
+  ['rzSliders','rzKeyScale','Rasante: largura das teclas (× largura do dedo)', 0.9, 2.2, 0.05, v => v.toFixed(2)+'×'],
+  ['pianoSliders','size','Tamanho máximo do piano', 0.5, 1.3, 0.02, v => Math.round(v*100)+'%', () => computePiano()],
+  tweakSlider('rot','Rodar', -45, 45, 1, v => v+'°'),
+  tweakSlider('tilt','Inclinação da mesa (ajuste fino)', -20, 20, 0.5, v => v+'°'),
+  tweakSlider('roll','Nivelar esquerda/direita', -20, 20, 0.5, v => v+'°'),
+  ['touchSliders','sensitivity','Sensibilidade', 0.4, 2.5, 0.05, v => v.toFixed(2)+'× (desce ≥ '+(8/v).toFixed(1)+' mm)'],
+  ['touchSliders','touchMm','Zona de toque acima da mesa', 3, 25, 0.5, v => v+' mm'],
+  ['touchSliders','strikeSpeed','Velocidade mínima da batida (portátil aberto)', 10, 200, 5, v => v+' mm/s'],
+  ['touchSliders','isolation','Isolamento entre dedos', 0, 0.95, 0.05, v => v.toFixed(2)],
+  ['touchSliders','releaseMm','Subida para soltar a nota', 2, 15, 0.5, v => v+' mm'],
+  ['touchSliders','restrikeMm','Subida para repetir a nota', 1.5, 10, 0.5, v => v+' mm'],
+  ['touchSliders','debounceMs','Intervalo mínimo entre toques', 30, 300, 5, v => v+' ms'],
+  ['touchSliders','confirmMs','Janela de confirmação', 0, 80, 5, v => v+' ms'],
+  ['touchSliders','smoothing','Suavização', 0, 1, 0.05, v => Math.round(v*100)+'%'],
+  ['soundSliders','volume','Volume', -30, 6, 1, v => v+' dB', v => { if (sampler) sampler.volume.value = v; }],
+  ['practiceSliders','speed','Velocidade da música', 0.3, 1.5, 0.05, v => v.toFixed(2)+'×']
+];
+function buildSliders(){
+  for (const id of ['camSliders','rzSliders','pianoSliders','touchSliders','soundSliders','practiceSliders']) $(id).innerHTML = '';
+  for (const [host, key, name, mn, mx, st, fmt, fx] of SLIDERS){
+    const obj = key.startsWith('tweak.') ? store.tweak : S, k = key.replace('tweak.', '');
+    const d = document.createElement('label'); d.className = 'slider';
+    d.innerHTML = `<div class="top"><span>${name}</span><span class="val"></span></div><input type="range" min="${mn}" max="${mx}" step="${st}">`;
+    const inp = d.querySelector('input'), val = d.querySelector('.val');
+    inp.value = obj[k]; val.textContent = fmt(+obj[k]);
+    inp.addEventListener('input', () => { obj[k] = +inp.value; val.textContent = fmt(obj[k]); save(); if (fx) fx(obj[k]); });
+    $(host).appendChild(d);
+  }
+}
+function evToPx(e){
+  const r = view.getBoundingClientRect(), { fx, fy } = flips();
+  const x = (e.clientX - r.left)/r.width, y = (e.clientY - r.top)/r.height;
+  return [(fx ? 1-x : x)*vw, (fy ? 1-y : y)*vh];
+}
+function setAdjust(on){ adjusting = on; view.classList.toggle('adjust', on); $('btnAdjust').classList.toggle('on', on); $('btnAdjust').textContent = on ? 'Concluir' : 'Mover piano (arrastar)'; if (on) closePops(); }
+function releaseAll(){ releaseHand(hands.L, lastFrameT); releaseHand(hands.R, lastFrameT); }
+function rangeChanged(){ releaseAll(); setRange(); buildPiano(); closeSong(); computePiano(); }
+function bindUI(){
+  document.querySelectorAll('.nav').forEach(b => b.onclick = () => togglePop(b.dataset.pop));
+  document.querySelectorAll('.pop .x').forEach(b => b.onclick = closePops);
+  const calAny = () => rzOn() ? startRzCal() : (duoOn() && !duo.on ? banner('Liga primeiro o telemóvel (código QR no ecrã).', 3000) : startTableCal());
+  $('btnMain').onclick = () => stream ? calAny() : startCamera();
+  $('btnCal').onclick = calAny;
+  const setEngine = v => {
+    releaseAll(); rzReleaseAll(); S.engine = v; save(); hands.L.reset(); hands.R.reset();
+    $('engSel').value = v; document.querySelectorAll('#engSeg button').forEach(b => b.classList.toggle('on', b.dataset.eng === v));
+    if (v === 'duo') duoStart();
+    renderPair(); renderCalStatus();
+    if (stream && v !== 'duo') banner(v === 'rz' ? 'Modo portátil dobrado: câmara ao nível da mesa.' + (store.rz ? '' : ' Clica em “Calibrar”.') : 'Modo portátil aberto: câmara por cima das mãos.' + (piano ? '' : ' Clica em “Calibrar”.'), 3500);
+  };
+  $('engSel').onchange = e => setEngine(e.target.value);
+  document.querySelectorAll('#engSeg button').forEach(b => b.onclick = () => setEngine(b.dataset.eng));
+  $('engSel').value = S.engine; document.querySelectorAll('#engSeg button').forEach(b => b.classList.toggle('on', b.dataset.eng === S.engine));
+  $('sideYes').onclick = () => { $('askSide').style.display = 'none'; };
+  $('sideNo').onclick = () => { if (store.rz){ rzReleaseAll(); store.rz.flip = !store.rz.flip; save(); } $('askSide').style.display = 'none'; banner('Lados invertidos. Confirma: a mão direita deve mexer o lado direito do teclado.', 4000); };
+  $('chkRzStrike').checked = S.rzStrike; $('chkRzStrike').onchange = e => { S.rzStrike = e.target.checked; save(); };
+  $('showSel').value = S.rzShow2; $('showSel').onchange = e => { S.rzShow2 = e.target.value; save(); };
+  // Barra da altura: para cima = piano (e linha de toque) mais acima na imagem.
+  $('rzY').oninput = e => { const r = store.rz; if (!r) return; if (r.b0 == null) r.b0 = r.b; r.b = r.b0 - (+e.target.value); rz.accC = null; rz.gapS = null; save(); };
+  $('blackSel').value = S.rzBlackMode; $('blackSel').onchange = e => { S.rzBlackMode = e.target.value; save(); rzReleaseAll(); renderCalStatus(); if (S.rzBlackMode === 'depth' && !rzDepthOk()) banner('Deste ângulo não distingo o dedo avançado: fica o modo “entre as brancas”. Sobe a câmara 1–2 cm e recalibra para usar o dedo avançado.', 6000); };
+  $('btnRzFlip').onclick = () => { const r = store.rz; if (!r){ banner('Calibra primeiro.', 2500); return; } rzReleaseAll(); if (duoOn() && r.duo){ const D = r.duo; D.sg = -D.sg; D.Ac = D.mA - D.sg*(D.mX - RZW/2)/D.m; } else r.flip = !r.flip; save(); banner('Lados invertidos.', 1500); };
+  const light = () => { document.body.classList.toggle('light', S.screenLight); $('btnLight').classList.toggle('on', S.screenLight); };
+  $('btnLight').onclick = () => { S.screenLight = !S.screenLight; save(); light(); }; light();
+  $('btnTouchCal').onclick = startTouchCal;
+  $('btnTouchClear').onclick = () => { store.touch = null; save(); renderCalStatus(); };
+  $('devSel').onchange = e => { S.deviceId = e.target.value; save(); if (stream) startCamera(); };
+  $('viewSel').value = S.view; $('viewSel').onchange = e => { S.view = e.target.value; save(); };
+  $('chkSwap').checked = S.swapHands; $('chkSwap').onchange = e => { S.swapHands = e.target.checked; save(); releaseAll(); hands.L.reset(); hands.R.reset(); };
+  $('octSel').value = S.octaves; $('octSel').onchange = e => { S.octaves = +e.target.value; save(); rangeChanged(); };
+  $('startSel').value = S.startOct; $('startSel').onchange = e => { S.startOct = +e.target.value; save(); rangeChanged(); };
+  $('labelSel').value = S.labels; $('labelSel').onchange = e => { S.labels = e.target.value; save(); buildPiano(); };
+  $('chkFit').checked = S.autoFit; $('chkFit').onchange = e => { S.autoFit = e.target.checked; save(); computePiano(); };
+  $('chkLevel').checked = S.levelCam; $('chkLevel').onchange = e => { S.levelCam = e.target.checked; save(); };
+  $('chkTable').checked = S.showTable; $('chkTable').onchange = e => { S.showTable = e.target.checked; save(); };
+  $('btnAdjust').onclick = () => setAdjust(!adjusting);
+  $('btnResetTweak').onclick = () => { store.tweak = { rot:0, tilt:0, roll:0, offX:0, offY:0 }; S.size = 1; save(); buildSliders(); computePiano(); };
+  // Arrastar o piano sobre o plano da mesa
+  view.addEventListener('pointerdown', e => { if (adjusting && piano){ drag = evToPx(e); view.setPointerCapture(e.pointerId); } });
+  view.addEventListener('pointermove', e => {
+    if (!drag || !piano) return;
+    const p = evToPx(e), A = rayPlane(drag[0], drag[1], cam.f, cam.cx, cam.cy, piano.n, piano.d), B = rayPlane(p[0], p[1], cam.f, cam.cx, cam.cy, piano.n, piano.d), D = V.sub(B, A);
+    store.tweak.offX += V.dot(D, piano.u); store.tweak.offY += V.dot(D, piano.v); drag = p; computePiano();
+  });
+  const endDrag = () => { if (drag){ drag = null; save(); } };
+  view.addEventListener('pointerup', endDrag); view.addEventListener('pointercancel', endDrag);
+  $('btnResetTouch').onclick = () => { for (const k of ['sensitivity','touchMm','isolation','releaseMm','restrikeMm','debounceMs','confirmMs','smoothing']) S[k] = DEFAULTS[k]; save(); buildSliders(); };
+  $('chkStrike').checked = S.strikeOnly; $('chkStrike').onchange = e => { S.strikeOnly = e.target.checked; save(); };
+  $('btnRec').onclick = startRec; $('btnShots').onclick = startShots;
+  $('chkMic').checked = false; S.useMic = false;
+  $('chkMic').onchange = async e => { if (e.target.checked){ S.useMic = await startMic(); e.target.checked = S.useMic; } else { S.useMic = false; stopMic(); } };
+  $('chkDebug').checked = S.showDebug;
+  const dbgShow = () => { $('debugBox').style.display = S.showDebug ? 'block' : 'none'; resizeCanvases(); };
+  $('chkDebug').onchange = e => { S.showDebug = e.target.checked; save(); dbgShow(); }; dbgShow();
+  $('exTest').onclick = exTest; $('exScale').onclick = exScale; $('exFive').onclick = exFive; $('exChord').onclick = exChord;
+  $('midiFile').onchange = e => { const f = e.target.files[0]; if (f) loadMidiFile(f).catch(err => banner('Erro a ler o MIDI: ' + err.message, 3500)); e.target.value = ''; };
+  $('modeFree').onclick = () => { S.mode = 'free'; save(); practice.waiting = false; renderSongCard(); };
+  $('modeWait').onclick = () => { S.mode = 'wait'; save(); renderSongCard(); };
+  $('scPlay').onclick = () => { initAudio(); if (practice.done) resetPractice(); practice.playing = !practice.playing; renderSongCard(); markExpected(); };
+  $('scRestart').onclick = () => { resetPractice(); practice.playing = true; renderSongCard(); markExpected(); };
+  $('scClose').onclick = closeSong;
+  $('btnWizard').onclick = () => openWizard(0);
+  addEventListener('resize', resizeCanvases);
+  addEventListener('keydown', e => { if ((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey && !/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) (rzOn() ? startRzCal : startTableCal)(); if (e.key === 'Escape'){ closePops(); setAdjust(false); } });
+}
+
+// ---------- Assistente ----------
+let wzStep = 0;
+const WZ = [
+  { t:'1. Câmara', done:() => !!stream,
+    b:() => `<p>Põe a câmara à tua frente, baixa, a ver a zona da mesa onde vais pousar as mãos (a webcam do portátil com o ecrã inclinado para baixo serve). Luz forte sobre a mesa melhora muito a deteção.</p>
+             <p>${stream ? '<span style="color:var(--aq-hi)">Câmara ativa.</span>' : '<button class="btn primary" id="wzCam">Ativar câmara e som</button>'}</p>` },
+  { t:'2. Calibrar a mesa', done:() => rzOn() ? !!store.rz : !!piano,
+    b:() => `<p>São 3 poses seguidas, com instruções no ecrã (~15 s): <b>mãos espalmadas</b> na mesa (mede a mesa e coloca o piano), <b>pontas dos dedos pousadas</b> em posição de tocar, e <b>dedos no ar</b>. As duas últimas ensinam à app como cada dedo teu aparece quando toca, deste ângulo de câmara.</p>
+             <div class="row"><button class="btn primary" id="wzCal">Calibrar</button></div>
+             <p>${piano ? '<span style="color:var(--aq-hi)">Mesa calibrada.</span>' : '<span class="muted">Ainda por calibrar.</span>'} <span class="muted small">Repete (tecla C) sempre que mexeres na câmara.</span></p>` },
+  { t:'3. Tocar', done:() => false,
+    b:() => `<p>Mantém os dedos no ar por cima das teclas e toca na mesa: a nota soa quando o dedo desce e chega à superfície, e para quando o levantas. O anel à volta do dedo indica que está na zona de toque.</p>
+             <div class="row"><button class="btn primary" id="wzEx">Melodia de teste</button><button class="btn" id="wzEx2">Escala de Dó</button></div>
+             <p class="small muted">Se falhar toques: em Deteção, sobe a “Zona de toque”. Se tocarem dedos que estão no ar: baixa-a.</p>` }
+];
+function openWizard(i){ wzStep = i; closePops(); $('wizard').style.display = 'flex'; renderWizard(); }
+function closeWizard(){ $('wizard').style.display = 'none'; store.wizardDone = true; save(); }
+function renderWizard(){
+  renderCalStatus();
+  if ($('wizard').style.display !== 'flex') return;
+  const st = WZ[wzStep];
+  $('wzTitle').textContent = st.t; $('wzSub').textContent = `Configuração · passo ${wzStep+1} de 3`;
+  [...$('wzSteps').children].forEach((d,i) => { d.className = WZ[i].done() ? 'done' : (i === wzStep ? 'cur' : ''); });
+  $('wzBody').innerHTML = st.b();
+  $('wzPrev').disabled = wzStep === 0; $('wzNext').textContent = wzStep === 2 ? 'Concluir' : 'Seguinte';
+  const on = (id, fn) => { const e = $(id); if (e) e.onclick = fn; };
+  on('wzCam', () => startCamera());
+  on('wzCal', () => { $('wizard').style.display = 'none'; (rzOn() ? startRzCal : startTableCal)(); setTimeout(() => { if (!store.wizardDone) openWizard((rzOn() ? store.rz : piano) ? 2 : 1); }, rzOn() ? 29500 : 20500); });
+  on('wzEx', () => { closeWizard(); exTest(); });
+  on('wzEx2', () => { closeWizard(); exScale(); });
+}
+$('wzPrev').onclick = () => { if (wzStep > 0){ wzStep--; renderWizard(); } };
+$('wzNext').onclick = () => { if (wzStep < 2){ wzStep++; renderWizard(); } else closeWizard(); };
+$('wzClose').onclick = closeWizard;
+
+// ---------- Arranque ----------
+if (TELE !== null) startTele();
+else {
+  setRange(); buildPiano(); buildSliders(); bindUI(); updateCam(); renderCalStatus(); resizeCanvases();
+  requestAnimationFrame(uiLoop);
+  if (S.engine === 'duo') duoStart();
+  if (!store.wizardDone) openWizard(0);
+}
+</script>
+</body>
+</html>
