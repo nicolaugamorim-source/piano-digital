@@ -885,20 +885,31 @@ function rzFrame(t){
 // O telemóvel (deitado na mesa, à frente das mãos) envia a sua câmara por WebRTC e mostra o piano.
 // O portátil faz tudo: vê o TOQUE na imagem do telemóvel (motor rasante) e reconhece os DEDOS na sua própria câmara (MediaPipe);
 // cada toque é atribuído ao dedo cuja posição, vista de cima, corresponde à posição lateral do toque na imagem do telemóvel.
-const duo = { peer:null, code:null, conn:null, vid:$('video2'), on:false, loop:false, lastSend:0 };
+const duo = { peer:null, code:null, conn:null, vid:$('video2'), on:false, found:false, fail:false, to:0, loop:false, lastSend:0 };
+const ICE = { iceServers: [
+  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.relay.metered.ca:80'] },
+  { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username:'peerjs', credential:'peerjsp' },
+  { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'], username:'openrelayproject', credential:'openrelayproject' }
+] };
+const NET_TIP = 'A rede está a bloquear a ligação entre os dois aparelhos (comum em redes de universidade/residência). Liga o portátil ao hotspot do telemóvel, ou os dois ao mesmo Wi-Fi de casa, e tenta outra vez.';
 const TELE_FOV = 72;      // campo de visão horizontal típico de uma câmara de selfie (graus)
 function duoStart(){
   if (duo.peer || typeof Peer === 'undefined'){ renderPair(); return; }
   duo.code = store.duoCode || (store.duoCode = String(10000 + Math.floor(Math.random()*90000))); save();
-  const peer = duo.peer = new Peer('pianodigital-' + duo.code);
+  const peer = duo.peer = new Peer('pianodigital-' + duo.code, { config: ICE });
   peer.on('open', renderPair);
   peer.on('error', e => { if (e.type === 'unavailable-id'){ store.duoCode = null; duo.peer = null; try { peer.destroy(); } catch(_){} duoStart(); } else { $('pairStatus').textContent = 'Erro de ligação: ' + e.type; } });
   peer.on('disconnected', () => { try { peer.reconnect(); } catch(_){} });
   peer.on('connection', cn => { duo.conn = cn; cn.on('close', () => { if (duo.conn === cn) duo.conn = null; renderPair(); }); cn.on('open', renderPair); });
   peer.on('call', call => {
     call.answer();
-    call.on('stream', st => { duo.vid.srcObject = st; duo.vid.play().catch(()=>{}); duo.on = true; renderPair(); duoLoop(); });
-    call.on('close', () => { duo.on = false; rzReleaseAll(); renderPair(); });
+    duo.found = true; duo.fail = false; renderPair();
+    // "Ligado" só quando o vídeo do telemóvel começa mesmo a chegar (a negociação pode acontecer sem a rede deixar passar o vídeo).
+    call.on('stream', st => { duo.vid.srcObject = st; duo.vid.play().catch(()=>{}); duo.vid.onplaying = () => { duo.on = true; duo.fail = false; renderPair(); duoLoop(); banner('Telemóvel ligado. Clica em “Calibrar”.', 4000); }; });
+    const pc = call.peerConnection;
+    if (pc) pc.addEventListener('iceconnectionstatechange', () => { if (pc.iceConnectionState === 'failed'){ duo.fail = true; duo.found = false; renderPair(); } });
+    clearTimeout(duo.to); duo.to = setTimeout(() => { if (!duo.on){ duo.fail = true; renderPair(); } }, 20000);
+    call.on('close', () => { duo.on = false; duo.found = false; rzReleaseAll(); renderPair(); });
   });
   renderPair();
 }
@@ -910,7 +921,8 @@ function renderPair(){
   $('pairCode').textContent = duo.code || '–';
   if (location.protocol === 'file:'){ $('pairHelp').innerHTML = 'Para usar o telemóvel, a app tem de ser aberta pelo endereço <b>https</b> onde está publicada (não como ficheiro).'; $('pairQR').innerHTML = ''; }
   else if (typeof qrcode !== 'undefined' && duo.code){ const q = qrcode(0, 'M'); q.addData(url); q.make(); $('pairQR').innerHTML = q.createSvgTag({ cellSize:4, margin:1, scalable:true }); }
-  $('pairStatus').textContent = typeof Peer === 'undefined' ? 'Sem ligação à internet: não consegui carregar o módulo de emparelhamento.' : (duo.peer && duo.peer.open ? 'À espera do telemóvel…' : 'A preparar a ligação…');
+  $('pairStatus').textContent = typeof Peer === 'undefined' ? 'Sem ligação à internet: não consegui carregar o módulo de emparelhamento.' : duo.fail ? NET_TIP : duo.found ? 'Telemóvel encontrado — a ligar o vídeo…' : (duo.peer && duo.peer.open ? 'À espera do telemóvel…' : 'A preparar a ligação…');
+  $('pairStatus').style.color = duo.fail ? 'var(--warn)' : '';
   renderCalStatus();
 }
 // Ciclo dos fotogramas do telemóvel
@@ -970,7 +982,7 @@ function duoFitMap(yl, c){
 }
 
 // ---------- 4d. Ecrã do telemóvel ----------
-const tele = { st:null, t:0 };
+const tele = { st:null, t:0, peer:null };
 function startTele(){
   document.body.classList.add('tele'); $('teleUI').style.display = 'block'; $('teleCode').value = TELE || '';
   const msg = (t, col) => { $('teleMsg').textContent = t; $('teleMsg').style.color = col || 'var(--muted)'; };
@@ -986,13 +998,24 @@ function startTele(){
     try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){}
     try { await document.documentElement.requestFullscreen(); await screen.orientation.lock('landscape'); } catch(e){}
     msg('A ligar ao portátil…');
-    const peer = new Peer(), host = 'pianodigital-' + code;
+    if (tele.peer){ try { tele.peer.destroy(); } catch(_){} }
+    const peer = tele.peer = new Peer({ config: ICE }), host = 'pianodigital-' + code;
+    let done = false;
+    const ok = () => { if (done) return; done = true; $('teleStart').style.display = 'none'; };
+    const lost = t => { done = false; $('teleStart').style.display = 'block'; msg(t, 'var(--warn)'); };
     peer.on('open', () => {
-      const cn = peer.connect(host, { reliable:false });
-      cn.on('open', () => { $('teleStart').style.display = 'none'; });
+      msg('Portátil encontrado — a ligar o vídeo…');
+      const call = peer.call(host, st), pc = call && call.peerConnection;
+      if (pc) pc.addEventListener('iceconnectionstatechange', () => {
+        const q = pc.iceConnectionState;
+        if (q === 'connected' || q === 'completed') ok();
+        else if (q === 'failed') lost(NET_TIP);
+        else if (q === 'disconnected') lost('Ligação interrompida. Carrega outra vez em “Ligar”.');
+      });
+      const cn = peer.connect(host);
+      cn.on('open', ok);
       cn.on('data', d => { tele.st = d; tele.t = performance.now(); });
-      cn.on('close', () => { $('teleStart').style.display = 'block'; msg('Ligação perdida. Carrega outra vez em “Ligar”.', 'var(--warn)'); });
-      peer.call(host, st);
+      setTimeout(() => { if (!done) msg(NET_TIP, 'var(--warn)'); }, 20000);
     });
     peer.on('error', e => msg(e.type === 'peer-unavailable' ? 'Não encontrei o portátil com esse código. Confirma que o portátil está no modo “Portátil + telemóvel”.' : 'Erro: ' + e.type, 'var(--bad)'));
   };
@@ -1000,6 +1023,7 @@ function startTele(){
   const draw = () => {
     const dpr = devicePixelRatio || 1, W = cv.width = Math.round(innerWidth*dpr), H = cv.height = Math.round(innerHeight*dpr), d = tele.st;
     g.fillStyle = '#030908'; g.fillRect(0, 0, W, H);
+    if (!d && $('teleStart').style.display === 'none'){ g.fillStyle = '#86aaa5'; g.textAlign = 'center'; g.font = `500 ${Math.round(H*0.05)}px Inter, system-ui`; g.fillText('Ligado. À espera do piano do portátil…', W/2, H/2); }
     if (d){
       const lo = d.lo, hi = d.hi, nW = 7*((hi - lo + 1)/12), kw = W/nW, top = H*0.34, kh = H - top - 4*dpr, bh = kh*0.6;
       const act = new Set(d.act), exp = new Set(d.exp), names = d.lab === 'solfege' ? SOLFEGE : NOTE_NAMES;
