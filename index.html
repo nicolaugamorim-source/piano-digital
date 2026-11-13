@@ -8,8 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.28/build/Midi.js"></script>
-<!-- Ligação portátil ↔ telemóvel (WebRTC ponto a ponto) e código QR -->
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<!-- Ligação portátil ↔ telemóvel (mensagens pequenas por um retransmissor público) e código QR -->
+<script src="https://unpkg.com/mqtt@5.16.1/dist/mqtt.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
 :root{
@@ -748,14 +748,16 @@ function finishTouchCal(){
   renderCalStatus(); renderWizard();
 }
 let bannerTimer = null;
-function banner(msg, ms){ const el = $('banner'); el.textContent = msg; el.style.display = 'block'; clearTimeout(bannerTimer); if (ms) bannerTimer = setTimeout(() => el.style.display = 'none', ms); }
+function banner(msg, ms){
+  if (TELE !== null){ tele.banner = msg; tele.bannerT = performance.now() + (ms || 60000); if (tele.link) tele.link.send({ k:'msg', m:msg, ms:ms || 0 }); return; }
+  const el = $('banner'); el.textContent = msg; el.style.display = 'block'; clearTimeout(bannerTimer); if (ms) bannerTimer = setTimeout(() => el.style.display = 'none', ms); }
 
 // ---------- 4b. Motor rasante: estado, calibração e ciclo ----------
 const RZW = 640;
 const rz = { cv:document.createElement('canvas'), ctx:null, H:360, sc:0.5, bg:null, prev:[], prevGap:null, touches:[], hovers:[], active:new Map(), offT:new Map(), yTop:0, roiH:0, yl:null, calib:null, lastT:0, mp:false, tracks:[], hist:[], accC:null, accY:null, gapS:null };
 rz.ctx = rz.cv.getContext('2d', { willReadFrequently:true });
 const rzOn = () => S.engine === 'rz', duoOn = () => S.engine === 'duo';
-const rzSrc = () => duoOn() ? duo.vid : video;           // modo duo: a imagem rasante vem da câmara do telemóvel
+const rzSrc = () => TELE !== null ? $('teleVid') : video;      // no telemóvel, a imagem rasante é a da sua própria câmara
 function rzSize(){ const v = rzSrc(); rz.sc = RZW/(v.videoWidth || 1280); rz.H = Math.round((v.videoHeight || 720)*rz.sc); }
 // teclado: posição lateral (px de processamento) ↔ mm no teclado; pen = px abaixo da linha (dedo mais perto da câmara)
 function rzGeom(){ const c = store.rz; return { keyPx: S.rzKeyScale*c.wr, zref: (RZW/2)/Math.tan(S.fov*Math.PI/360)*16/c.wr }; }
@@ -840,6 +842,13 @@ function rzFrame(t){
   }
   rz.tracks = rz.tracks.filter(tr => used.has(tr) || ++tr.miss <= 2);
   res.hovers = rz.tracks.filter(tr => tr.age >= 3);
+  rz.prevGap = gap; rz.yl = yl; rz.yTop = yTop; rz.gap = gap;
+  // No telemóvel fica por aqui: envia os toques ao portátil, que decide o dedo, a tecla e a nota.
+  if (TELE !== null){ rz.prev = res.touches; rz.touches = res.touches; rz.hovers = []; teleSendTouches(res.touches); return; }
+  rzNotes(res, t, c);
+}
+// Segunda metade: dos toques às notas. No modo "portátil + telemóvel" os toques chegam do telemóvel.
+function rzNotes(res, t, c){
   // Pontas reais dos dedos, se o reconhecimento de mãos as estiver a ver neste fotograma.
   const tips = [], spans = [];
   for (const hs of [hands.L, hands.R]){
@@ -881,57 +890,41 @@ function rzFrame(t){
   }
   for (const midi of [...rz.active.keys()]) if (!now.has(midi)){ rz.active.delete(midi); rz.offT.set(midi, t); noteOff(midi); }
   for (const h of res.hovers){ const k = rzToKey(h.x, 0); h.midi = k.key ? k.key.midi : null; h.a = k.a; }
-  rz.prev = res.touches; rz.prevGap = gap; rz.touches = res.touches; rz.hovers = res.hovers; rz.yl = yl; rz.yTop = yTop; rz.gap = gap;
+  rz.prev = res.touches; rz.touches = res.touches; rz.hovers = res.hovers;
 }
 // ---------- 4c. Modo "portátil + telemóvel" ----------
-// O telemóvel (deitado na mesa, à frente das mãos) envia a sua câmara por WebRTC e mostra o piano.
-// O portátil faz tudo: vê o TOQUE na imagem do telemóvel (motor rasante) e reconhece os DEDOS na sua própria câmara (MediaPipe);
-// cada toque é atribuído ao dedo cuja posição, vista de cima, corresponde à posição lateral do toque na imagem do telemóvel.
-const duo = { peer:null, code:null, conn:null, vid:$('video2'), on:false, found:false, fail:false, to:0, loop:false, lastSend:0 };
-const ICE = { iceServers: [
-  { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.relay.metered.ca:80'] },
-  { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username:'peerjs', credential:'peerjsp' },
-  { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'], username:'openrelayproject', credential:'openrelayproject' }
-] };
-const APP_VER = 'v13';
-// Diagnóstico da ligação WebRTC: estado e tipos de endereços (host = rede local, srflx = internet, relay = retransmissão).
-function watchPc(pc, label, out){
-  if (!pc) return;
-  const tick = async () => {
-    if (pc.connectionState === 'closed') return;
-    let lc = {}, rc = {}, pair = '—';
-    try {
-      const st = await pc.getStats(), byId = {};
-      st.forEach(r => { byId[r.id] = r; if (r.type === 'local-candidate') lc[r.candidateType] = (lc[r.candidateType]||0) + 1; if (r.type === 'remote-candidate') rc[r.candidateType] = (rc[r.candidateType]||0) + 1; });
-      st.forEach(r => { if (r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated || r.selected)){ const a = byId[r.localCandidateId], b = byId[r.remoteCandidateId]; pair = (a ? a.candidateType : '?') + '↔' + (b ? b.candidateType : '?'); } });
-    } catch(e){}
-    const f = o => ['host','srflx','prflx','relay'].filter(k => o[k]).map(k => k + o[k]).join(' ') || '0';
-    out(`${label}: ${pc.iceConnectionState} · meus ${f(lc)} · dele ${f(rc)} · par ${pair}`);
-    setTimeout(tick, 1000);
-  };
-  tick();
+// O telemóvel (deitado na mesa, à frente das mãos) analisa a sua própria câmara e envia só os TOQUES (posição lateral de
+// cada dedo que cruza a linha). O portátil reconhece os DEDOS na sua câmara (MediaPipe) e junta as duas coisas.
+// Como as mensagens são minúsculas, vão por um retransmissor público (MQTT sobre WebSocket seguro): funciona mesmo em
+// redes/firewalls que bloqueiam ligações diretas entre aparelhos. Não é enviada imagem nenhuma.
+const APP_VER = 'v14';
+const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+function linkOpen(code, role, onmsg, onstate){
+  const sub = `pianodigital/${code}/${role === 'pc' ? 'up' : 'down'}`, pub = `pianodigital/${code}/${role === 'pc' ? 'down' : 'up'}`;
+  const sid = Math.random().toString(36).slice(2, 8), seen = { s:null, q:-1 }, clients = [];
+  for (const url of BROKERS){
+    let cl; try { cl = mqtt.connect(url, { clientId:'pd_' + role + '_' + sid + clients.length, clean:true, reconnectPeriod:2000, connectTimeout:8000, keepalive:20 }); } catch(e){ continue; }
+    cl.on('connect', () => { cl.subscribe(sub, { qos:0 }); onstate(); });
+    cl.on('close', onstate); cl.on('error', () => {});
+    cl.on('message', (tp, payload) => {
+      let d; try { d = JSON.parse(payload.toString()); } catch(e){ return; }
+      if (d.s !== seen.s){ seen.s = d.s; seen.q = -1; }
+      if (d.q <= seen.q) return;                       // a mesma mensagem chega pelos dois retransmissores: fica só a primeira
+      seen.q = d.q; onmsg(d);
+    });
+    clients.push(cl);
+  }
+  let q = 0;
+  return { send(o){ o.s = sid; o.q = ++q; const str = JSON.stringify(o); for (const cl of clients) if (cl.connected) cl.publish(pub, str, { qos:0 }); },
+           up: () => clients.filter(cl => cl.connected).length, close(){ clients.forEach(cl => { try { cl.end(true); } catch(e){} }); } };
 }
-const NET_TIP = 'A rede está a bloquear a ligação entre os dois aparelhos (comum em redes de universidade/residência). Liga o portátil ao hotspot do telemóvel, ou os dois ao mesmo Wi-Fi de casa, e tenta outra vez.';
+const duo = { link:null, code:null, on:false, lastRx:0, lastSend:0, lastCfg:0 };
 const TELE_FOV = 72;      // campo de visão horizontal típico de uma câmara de selfie (graus)
 function duoStart(){
-  if (duo.peer || typeof Peer === 'undefined'){ renderPair(); return; }
+  if (duo.link || typeof mqtt === 'undefined'){ renderPair(); return; }
   duo.code = store.duoCode || (store.duoCode = String(10000 + Math.floor(Math.random()*90000))); save();
-  const peer = duo.peer = new Peer('pianodigital-' + duo.code, { config: ICE });
-  peer.on('open', renderPair);
-  peer.on('error', e => { if (e.type === 'unavailable-id'){ store.duoCode = null; duo.peer = null; try { peer.destroy(); } catch(_){} duoStart(); } else { $('pairStatus').textContent = 'Erro de ligação: ' + e.type; } });
-  peer.on('disconnected', () => { try { peer.reconnect(); } catch(_){} });
-  peer.on('connection', cn => { duo.conn = cn; watchPc(cn.peerConnection, 'dados', t => { duo.dbgD = t; $('pairDbg').textContent = APP_VER + ' · ' + (duo.dbgV || '') + ' | ' + (duo.dbgD || ''); }); cn.on('close', () => { if (duo.conn === cn) duo.conn = null; renderPair(); }); cn.on('open', renderPair); });
-  peer.on('call', call => {
-    call.answer();
-    duo.found = true; duo.fail = false; renderPair();
-    // "Ligado" só quando o vídeo do telemóvel começa mesmo a chegar (a negociação pode acontecer sem a rede deixar passar o vídeo).
-    call.on('stream', st => { duo.vid.srcObject = st; duo.vid.play().catch(()=>{}); duo.vid.onplaying = () => { duo.on = true; duo.fail = false; renderPair(); duoLoop(); banner('Telemóvel ligado. Clica em “Calibrar”.', 4000); }; });
-    const pc = call.peerConnection;
-    if (pc) pc.addEventListener('iceconnectionstatechange', () => { if (pc.iceConnectionState === 'failed'){ duo.fail = true; duo.found = false; renderPair(); } });
-    watchPc(pc, 'vídeo', t => { duo.dbgV = t; $('pairDbg').textContent = APP_VER + ' · ' + (duo.dbgV || '') + ' | ' + (duo.dbgD || ''); });
-    clearTimeout(duo.to); duo.to = setTimeout(() => { if (!duo.on){ duo.fail = true; renderPair(); } }, 20000);
-    call.on('close', () => { duo.on = false; duo.found = false; rzReleaseAll(); renderPair(); });
-  });
+  duo.link = linkOpen(duo.code, 'pc', duoMsg, renderPair);
+  setInterval(() => { const on = performance.now() - duo.lastRx < 3000 && duo.lastRx > 0; if (on !== duo.on){ duo.on = on; if (!on) rzReleaseAll(); else banner(store.rz ? 'Telemóvel ligado.' : 'Telemóvel ligado. Clica em “Calibrar”.', 3500); renderPair(); } }, 500);
   renderPair();
 }
 function renderPair(){
@@ -939,33 +932,36 @@ function renderPair(){
   $('pairBox').style.display = show ? 'block' : 'none'; $('pip').style.display = duoOn() && duo.on ? 'block' : 'none';
   if (!duoOn()) return;
   const url = location.origin + location.pathname + '?tele=' + (duo.code || '') + '&v=' + APP_VER;
-  if (!$('pairDbg').textContent) $('pairDbg').textContent = APP_VER;
   $('pairCode').textContent = duo.code || '–';
   if (location.protocol === 'file:'){ $('pairHelp').innerHTML = 'Para usar o telemóvel, a app tem de ser aberta pelo endereço <b>https</b> onde está publicada (não como ficheiro).'; $('pairQR').innerHTML = ''; }
   else if (typeof qrcode !== 'undefined' && duo.code){ const q = qrcode(0, 'M'); q.addData(url); q.make(); $('pairQR').innerHTML = q.createSvgTag({ cellSize:4, margin:1, scalable:true }); }
-  $('pairStatus').textContent = typeof Peer === 'undefined' ? 'Sem ligação à internet: não consegui carregar o módulo de emparelhamento.' : duo.fail ? NET_TIP : duo.found ? 'Telemóvel encontrado — a ligar o vídeo…' : (duo.peer && duo.peer.open ? 'À espera do telemóvel…' : 'A preparar a ligação…');
-  $('pairStatus').style.color = duo.fail ? 'var(--warn)' : '';
+  const up = duo.link ? duo.link.up() : 0;
+  $('pairStatus').textContent = typeof mqtt === 'undefined' ? 'Sem ligação à internet: não consegui carregar o módulo de emparelhamento.' : (up ? 'À espera do telemóvel…' : 'A ligar ao retransmissor…');
+  $('pairDbg').textContent = `${APP_VER} · retransmissores ligados: ${up}/${BROKERS.length}`;
   renderCalStatus();
 }
-// Ciclo dos fotogramas do telemóvel
-function duoLoop(){
-  if (duo.loop) return; duo.loop = true;
-  const step = () => {
-    if (duoOn() && duo.on && duo.vid.readyState >= 2 && duo.vid.videoWidth){
-      rzSize(); try { rzFrame(performance.now()/1000); } catch(e){ console.warn(e); }
-      duoPip();
-    }
-  };
-  if ('requestVideoFrameCallback' in HTMLVideoElement.prototype){ const cb = () => { step(); duo.vid.requestVideoFrameCallback(cb); }; duo.vid.requestVideoFrameCallback(cb); }
-  else setInterval(step, 33);
+// Mensagens do telemóvel
+function duoMsg(d){
+  duo.lastRx = performance.now();
+  if (!duoOn()) return;
+  const c = store.rz, t = performance.now()/1000;
+  if (d.k === 't' && c){ rzNotes({ touches: d.t.map(q => ({ x:q[0], xs:q[1], w:q[2], pen:q[3], pens:q[4], snd:!!q[5], vel:q[6] })), hovers:[] }, t, c); duoPip(); }
+  else if (d.k === 'h' && c){ if (rz.touches.length || rz.active.size) rzNotes({ touches:[], hovers:[] }, t, c); duoPip(); }
+  else if (d.k === 'msg') banner(d.m, d.ms || undefined);
+  else if (d.k === 'cal'){
+    const cols = []; for (const [x1, x2] of d.r) for (let x = x1; x <= x2; x++) cols.push(x);
+    store.rz = { a:d.a, b:d.b, b0:d.b, wr:d.wr, x0:d.x0, pb:0, thr:7, flip:false, sideOk:true, vw:d.vw, vh:d.vh };
+    store.rz.duo = duoFitMap(cols, store.rz); save(); rzReleaseAll(); renderCalStatus(); renderWizard();
+    banner(store.rz.duo ? `Calibrado. O telemóvel vê o toque e o portátil reconhece os dedos (${store.rz.duo.n} dedos usados para alinhar as duas câmaras).` : 'Calibrado, mas o portátil não estava a ver os dedos: as teclas vão sair só pela posição lateral. Confirma que a câmara do portátil vê as mãos e recalibra.', 6000);
+  }
 }
-// Miniatura da imagem do telemóvel, com a linha de toque e os toques (para confirmares que está a ver bem)
+// Faixa esquemática do que o telemóvel está a detetar (linha da mesa e toques)
 function duoPip(){
-  const cv = $('pip'), g = cv.getContext('2d'), v = duo.vid, k = cv.width/RZW; cv.height = Math.round(cv.width*v.videoHeight/v.videoWidth);
-  g.drawImage(v, 0, 0, cv.width, cv.height);
-  const c = store.rz; if (!c) return;
-  g.strokeStyle = AQ_HI; g.lineWidth = 1.5; g.beginPath(); g.moveTo(0, c.b*k); g.lineTo(cv.width, (c.a*RZW + c.b)*k); g.stroke();
-  for (const q of rz.touches){ g.beginPath(); g.arc(q.xs*k, (c.a*q.xs + c.b)*k, 6, 0, Math.PI*2); g.fillStyle = q.snd ? (q.f != null ? FINGER_COLORS[q.f] : AQ_HI) : 'rgba(255,255,255,0.35)'; g.fill(); }
+  const cv = $('pip'), g = cv.getContext('2d'); if (cv.height !== 56) cv.height = 56;
+  const k = cv.width/RZW; g.fillStyle = '#020b0a'; g.fillRect(0, 0, cv.width, 56);
+  g.strokeStyle = AQ_HI; g.lineWidth = 1.5; g.beginPath(); g.moveTo(0, 38); g.lineTo(cv.width, 38); g.stroke();
+  g.fillStyle = '#86aaa5'; g.font = '11px Inter, system-ui'; g.textAlign = 'left'; g.fillText('Telemóvel: toques na mesa', 8, 14);
+  for (const q of rz.touches){ g.beginPath(); g.arc(q.xs*k, 38, 7, 0, Math.PI*2); g.fillStyle = q.snd ? (q.f != null ? FINGER_COLORS[q.f] : AQ_HI) : 'rgba(255,255,255,0.35)'; g.fill(); }
 }
 // Toque na imagem do telemóvel (posição lateral x) → dedo e tecla vistos pela câmara do portátil.
 function duoToKey(tc, pv){
@@ -987,61 +983,66 @@ function duoToKey(tc, pv){
   const bk = KEYS.find(k => k.black && Math.abs(a - (k.x0 + k.x1)/2) <= S.rzBlackHalf);
   return { a, black:!!bk, key: bk || keyAtPlane(a, KL*0.8), f:null, hand:null };
 }
-// Fim do passo "pontas pousadas" no modo duo: relacionar as duas vistas.
-function duoFitMap(yl, c){
+// Fim do passo "pontas pousadas" no modo duo: relacionar as duas vistas. cols = colunas da imagem do telemóvel onde há dedos pousados.
+function duoFitMap(cols, c){
   const As = [], bs = [];
-  if (piano) for (const hs of [hands.L, hands.R]) if (hs.pts && lastFrameT - hs.lastSeen < 0.4) for (const fs of hs.fingers) if (fs.tc && fs.tc[0] > -KW && fs.tc[0] < PW + KW){ As.push(fs.tc[0]*piano.s); bs.push(fs.tc[1]); }
-  const cols = []; for (let x = 0; x < RZW; x++) if (yl[x] >= 0 && c.a*x + c.b - yl[x] <= 3) cols.push(x);
+  if (piano) for (const hs of [hands.L, hands.R]) if (hs.pts && lastFrameT - hs.lastSeen < 0.6) for (const fs of hs.fingers) if (fs.tc && fs.tc[0] > -KW && fs.tc[0] < PW + KW){ As.push(fs.tc[0]*piano.s); bs.push(fs.tc[1]); }
   if (As.length < 3 || cols.length < 10) return null;
   const A1 = Math.min(...As), A2 = Math.max(...As), x1 = cols[0], x2 = cols[cols.length-1];
   if (A2 - A1 < 40 || x2 - x1 - c.wr < 20) return null;
   const m = (x2 - x1 - c.wr)/(A2 - A1), mA = (A1 + A2)/2, mX = (x1 + x2)/2, fp = (RZW/2)/Math.tan(TELE_FOV*Math.PI/360);
   // sentido (imagem espelhada ou não): o que deixa os dedos vistos de cima mais perto das colunas com toque
-  const colSet = new Uint8Array(RZW); cols.forEach(x => colSet[x] = 1);
+  const colSet = new Uint8Array(RZW); cols.forEach(x => { if (x >= 0 && x < RZW) colSet[x] = 1; });
   const resid = sg => { let q = 0; for (const A of As){ const xp = Math.round(mX + sg*m*(A - mA)); let d = 0; while (d < 60 && !(colSet[xp-d] || colSet[xp+d])) d++; q += d; } return q; };
   const rN = resid(-1), rP = resid(1), sg = rP < 0.85*rN ? 1 : -1;
   return { sg, fp, m, mA, mX, Z0: fp/m, Ac: mA - sg*(mX - RZW/2)/m, b0: mean(bs), n: As.length };
 }
+// Estado enviado ao telemóvel (~12 vezes por segundo) + definições do toque (de vez em quando)
+function duoSend(now){
+  if (!duo.link || !duo.link.up() || now - duo.lastSend < 80) return; duo.lastSend = now;
+  const dots = [];
+  for (const hs of [hands.L, hands.R]) if (hs.pts) hs.fingers.forEach((fs, f) => { if (fs.tc && fs.tc[0] > -KW && fs.tc[0] < PW + KW && fs.tc[1] > -0.3*KL && fs.tc[1] < 1.4*KL) dots.push([Math.round(clamp(fs.tc[0]/PW, 0, 1)*1000)/1000, fs.tc[1] <= BL ? 1 : 0, f, fs.duo != null ? 1 : 0]); });
+  const o = { k:'s', lo:LOW, hi:HIGH, lab:S.labels, act:[...held.keys()], exp:[...expectedSet()], dots, note:$('ltNote').textContent, who:$('ltWho').textContent, song: practice.groups.length ? practice.name + ' · ' + $('scStats').textContent : '' };
+  if (now - duo.lastCfg > 1500){ duo.lastCfg = now; o.cfg = { tau:S.rzTauMm, st:S.rzStrike ? 1 : 0, sm:S.strikeMm, b: store.rz ? store.rz.b : null }; }
+  duo.link.send(o);
+}
 
 // ---------- 4d. Ecrã do telemóvel ----------
-const tele = { st:null, t:0, peer:null };
+const tele = { st:null, t:0, link:null, last:'', lastTx:0, banner:'', bannerT:0 };
+function teleSendTouches(ts){
+  if (!tele.link) return;
+  const now = performance.now(), r = v => Math.round(v*10)/10;
+  if (!ts.length){ if (tele.last !== '' || now - tele.lastTx > 250){ tele.last = ''; tele.lastTx = now; tele.link.send({ k:'h' }); } return; }
+  const arr = ts.map(q => [r(q.x), r(q.xs), r(q.w), r(q.pen), r(q.pens), q.snd ? 1 : 0, Math.round((q.vel || 0.5)*100)/100]), sig = JSON.stringify(arr);
+  if (sig === tele.last && now - tele.lastTx < 120) return;
+  tele.last = sig; tele.lastTx = now; tele.link.send({ k:'t', t:arr });
+}
 function startTele(){
-  document.body.classList.add('tele'); $('teleUI').style.display = 'block'; $('teleCode').value = TELE || '';
+  document.body.classList.add('tele'); $('teleUI').style.display = 'block'; $('teleCode').value = TELE || ''; $('teleDbg').textContent = APP_VER;
   const msg = (t, col) => { $('teleMsg').textContent = t; $('teleMsg').style.color = col || 'var(--muted)'; };
   $('teleGo').onclick = async () => {
     const code = $('teleCode').value.trim();
     if (!/^\d{5}$/.test(code)){ msg('Escreve os 5 algarismos que aparecem no portátil.', 'var(--warn)'); return; }
-    if (typeof Peer === 'undefined'){ msg('Sem internet: não consegui carregar o módulo de ligação.', 'var(--bad)'); return; }
+    if (typeof mqtt === 'undefined'){ msg('Sem internet: não consegui carregar o módulo de ligação.', 'var(--bad)'); return; }
     msg('A abrir a câmara…');
     let st;
     try { st = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:30 } }, audio:false }); }
     catch(e){ msg('Não consegui abrir a câmara (' + (e.name || e) + '). Permite a câmara para este site.', 'var(--bad)'); return; }
-    $('teleVid').srcObject = st;
+    const v = $('teleVid'); v.srcObject = st; try { await v.play(); } catch(e){}
     try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){}
     try { await document.documentElement.requestFullscreen(); await screen.orientation.lock('landscape'); } catch(e){}
     msg('A ligar ao portátil…');
-    if (tele.peer){ try { tele.peer.destroy(); } catch(_){} }
-    const peer = tele.peer = new Peer({ config: ICE }), host = 'pianodigital-' + code;
-    let done = false;
-    const ok = () => { if (done) return; done = true; $('teleStart').style.display = 'none'; };
-    const lost = t => { done = false; $('teleStart').style.display = 'block'; msg(t, 'var(--warn)'); };
-    peer.on('open', () => {
-      msg('Portátil encontrado — a ligar o vídeo…');
-      const call = peer.call(host, st), pc = call && call.peerConnection;
-      watchPc(pc, 'vídeo', t => { tele.dbgV = t; $('teleDbg').textContent = APP_VER + ' · ' + (tele.dbgV || '') + ' | ' + (tele.dbgD || ''); });
-      if (pc) pc.addEventListener('iceconnectionstatechange', () => {
-        const q = pc.iceConnectionState;
-        if (q === 'connected' || q === 'completed') ok();
-        else if (q === 'failed') lost(NET_TIP);
-        else if (q === 'disconnected') lost('Ligação interrompida. Carrega outra vez em “Ligar”.');
-      });
-      const cn = peer.connect(host);
-      setTimeout(() => watchPc(cn.peerConnection, 'dados', t => { tele.dbgD = t; $('teleDbg').textContent = APP_VER + ' · ' + (tele.dbgV || '') + ' | ' + (tele.dbgD || ''); }), 300);
-      cn.on('open', ok);
-      cn.on('data', d => { tele.st = d; tele.t = performance.now(); });
-      setTimeout(() => { if (!done) msg(NET_TIP, 'var(--warn)'); }, 20000);
-    });
-    peer.on('error', e => msg(e.type === 'peer-unavailable' ? 'Não encontrei o portátil com esse código. Confirma que o portátil está no modo “Portátil + telemóvel”.' : 'Erro: ' + e.type, 'var(--bad)'));
+    if (tele.link) tele.link.close();
+    tele.link = linkOpen(code, 'tele', d => {
+      if (d.k === 's'){ tele.st = d; tele.t = performance.now(); $('teleStart').style.display = 'none';
+        if (d.cfg){ S.rzTauMm = d.cfg.tau; S.rzStrike = !!d.cfg.st; S.strikeMm = d.cfg.sm; if (store.rz && d.cfg.b != null && Math.abs(store.rz.b - d.cfg.b) > 0.01){ store.rz.b = d.cfg.b; rz.accC = null; rz.gapS = null; } } }
+      else if (d.k === 'cmd' && d.c === 'cal') startRzCal();
+    }, () => { $('teleDbg').textContent = `${APP_VER} · retransmissores ligados: ${tele.link ? tele.link.up() : 0}/${BROKERS.length}`; });
+    setInterval(() => { if (tele.link && !rz.touches.length) teleSendTouches([]); }, 250);
+    setTimeout(() => { if (!tele.st) msg('Ainda sem resposta do portátil. Confirma que o portátil está no modo “Portátil + telemóvel” com este código, e que os dois têm internet.', 'var(--warn)'); }, 9000);
+    // ciclo de análise da câmara do telemóvel
+    const step = () => { if (v.readyState >= 2 && v.videoWidth){ rzSize(); try { rzFrame(performance.now()/1000); } catch(e){ console.warn(e); } } };
+    if ('requestVideoFrameCallback' in HTMLVideoElement.prototype){ const cb = () => { step(); v.requestVideoFrameCallback(cb); }; v.requestVideoFrameCallback(cb); } else setInterval(step, 33);
   };
   const cv = $('teleCv'), g = cv.getContext('2d');
   const draw = () => {
@@ -1066,22 +1067,23 @@ function startTele(){
       if (d.song){ g.textAlign = 'center'; g.fillStyle = '#d8efec'; g.fillText(d.song, W/2, H*0.26); }
       if (performance.now() - tele.t > 2500){ g.textAlign = 'center'; g.fillStyle = '#ffb84d'; g.fillText('Sem dados do portátil…', W/2, H*0.13); }
     }
+    // instruções de calibração e avisos (por cima do piano)
+    if (tele.banner && performance.now() < tele.bannerT){
+      g.font = `600 ${Math.round(H*0.06)}px Inter, system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      const tw = Math.min(W*0.94, g.measureText(tele.banner).width + 40*dpr); g.fillStyle = 'rgba(2,14,13,0.92)'; g.fillRect(W/2 - tw/2, H*0.36, tw, H*0.2);
+      g.fillStyle = '#eafaf7'; g.fillText(tele.banner, W/2, H*0.46, W*0.9);
+    }
     requestAnimationFrame(draw);
   };
   requestAnimationFrame(draw);
 }
-// Estado enviado ao telemóvel (~15 vezes por segundo)
-function duoSend(now){
-  if (!duo.conn || !duo.conn.open || now - duo.lastSend < 66) return; duo.lastSend = now;
-  const dots = [];
-  for (const hs of [hands.L, hands.R]) if (hs.pts) hs.fingers.forEach((fs, f) => { if (fs.tc && fs.tc[0] > -KW && fs.tc[0] < PW + KW && fs.tc[1] > -0.3*KL && fs.tc[1] < 1.4*KL) dots.push([clamp(fs.tc[0]/PW, 0, 1), fs.tc[1] <= BL ? 1 : 0, f, fs.duo != null ? 1 : 0]); });
-  try { duo.conn.send({ lo:LOW, hi:HIGH, lab:S.labels, act:[...held.keys()], exp:[...expectedSet()], dots, note:$('ltNote').textContent, who:$('ltWho').textContent, song: practice.groups.length ? practice.name + ' · ' + $('scStats').textContent : '' }); } catch(e){}
-}
 
 // Calibração rasante: 1) sem mãos (fundo) 2) pontas dos dedos pousadas na linha das teclas brancas 3) dedos avançados (teclas pretas).
 function startRzCal(){
-  if (!stream){ banner('Ativa a câmara primeiro.', 2500); return; }
-  if (duoOn() && !duo.on){ banner('Liga primeiro o telemóvel (código QR no ecrã).', 3000); return; }
+  if (TELE === null){
+    if (!stream){ banner('Ativa a câmara primeiro.', 2500); return; }
+    if (duoOn()){ if (!duo.on){ banner('Liga primeiro o telemóvel (código QR no ecrã).', 3000); return; } duo.link.send({ k:'cmd', c:'cal' }); return; }   // a calibração corre no telemóvel
+  }
   if (rz.calib) return;
   closePops(); rzReleaseAll(); rzSize();
   const C = rz.calib = { phase:null, n:0, cnt:null, cols:null, timers:[] };
@@ -1090,7 +1092,7 @@ function startRzCal(){
     C.timers.push(setTimeout(() => { C.phase = phase; C.n = 0; C.cnt = new Uint16Array(RZW*rz.H); C.cols = Array.from({length:RZW}, () => []); banner('Não mexas…'); }, t0 + 4000));
     C.timers.push(setTimeout(() => rzCalEnd(phase), t0 + 5200));
   };
-  if (duoOn()){
+  if (TELE !== null){
     seq('bg', 'Telemóvel 1/2 · Tira as mãos da mesa', 0);
     seq('white', 'Telemóvel 2/2 · Pousa as PONTAS dos dedos das duas mãos nas teclas brancas do piano desenhado', 5600);
     return;
@@ -1132,10 +1134,11 @@ function rzCalEnd(phase){
     if (!runs.length) return fail('Não consegui medir os dedos. Repete com os dedos um pouco afastados.');
     const single = runs.filter(w => w <= 60).sort((p,q) => p-q), wr = single.length ? single[single.length>>1] : 24;
     store.rz = { a:ln.a, b:ln.b, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr:(store.rz && store.rz.thr) || 7, flip:!!(store.rz && store.rz.flip), sideOk:false, vw:rzSrc().videoWidth, vh:rzSrc().videoHeight };
-    if (duoOn()){
-      const c2 = store.rz; c2.duo = duoFitMap(yl, c2);
-      save(); rz.calib = null; rzReleaseAll(); renderCalStatus(); renderWizard();
-      banner(c2.duo ? `Calibrado. O telemóvel vê o toque e o portátil reconhece os dedos (${c2.duo.n} dedos usados para alinhar as duas câmaras).` : 'Calibrado, mas o portátil não estava a ver os dedos: as teclas vão sair só pela posição lateral. Confirma que a câmara do portátil vê as mãos e recalibra.', 6000);
+    if (TELE !== null){   // telemóvel: guarda a sua calibração e envia ao portátil a linha e as colunas com dedos pousados
+      const c2 = store.rz, rg = []; let x = 0;
+      while (x < RZW){ if (yl[x] >= 0 && c2.a*x + c2.b - yl[x] <= 3){ const x1 = x; while (x < RZW && yl[x] >= 0 && c2.a*x + c2.b - yl[x] <= 3) x++; rg.push([x1, x-1]); } else x++; }
+      save(); rz.calib = null; rzReleaseAll(); tele.banner = '';
+      if (tele.link) tele.link.send({ k:'cal', a:c2.a, b:c2.b, wr:c2.wr, x0:c2.x0, vw:c2.vw, vh:c2.vh, r:rg });
     }
     return;
   }
