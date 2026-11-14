@@ -101,7 +101,7 @@ body.light #piano{background:#fff}
 #pairBox{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:18px 22px;display:none;text-align:center;z-index:9;max-width:440px}
 #pairBox .code{font-size:34px;font-weight:700;letter-spacing:6px;color:var(--aq-hi);text-shadow:0 0 16px var(--glow)}
 #pairQR svg{background:#fff;border-radius:8px;padding:6px;width:170px;height:170px}
-#pip{position:absolute;left:16px;bottom:16px;width:300px;border-radius:10px;border:1px solid var(--aq-dim);display:none;z-index:5;box-shadow:0 0 18px rgba(21,160,147,.25)}
+#pip{position:absolute;left:16px;bottom:16px;width:320px;border-radius:10px;border:1px solid var(--aq-dim);display:none;z-index:5;box-shadow:0 0 18px rgba(21,160,147,.25)}
 /* ecrã do telemóvel */
 body.tele{display:block}
 body.tele header, body.tele main, body.tele #piano, body.tele .pop, body.tele #wizard{display:none!important}
@@ -897,7 +897,12 @@ function rzNotes(res, t, c){
 // cada dedo que cruza a linha). O portátil reconhece os DEDOS na sua câmara (MediaPipe) e junta as duas coisas.
 // Como as mensagens são minúsculas, vão por um retransmissor público (MQTT sobre WebSocket seguro): funciona mesmo em
 // redes/firewalls que bloqueiam ligações diretas entre aparelhos. Não é enviada imagem nenhuma.
-const APP_VER = 'v14';
+const APP_VER = 'v15';
+// Miniatura da câmara do telemóvel: vai cifrada (AES-GCM) com uma chave que só existe no código QR, nunca no retransmissor.
+const b64 = u8 => { let q = ''; for (let i = 0; i < u8.length; i++) q += String.fromCharCode(u8[i]); return btoa(q); };
+const unb64 = t => { const q = atob(t), u = new Uint8Array(q.length); for (let i = 0; i < q.length; i++) u[i] = q.charCodeAt(i); return u; };
+const hex2u8 = h => new Uint8Array((h.match(/../g) || []).map(x => parseInt(x, 16)));
+const aesKey = async hex => crypto.subtle.importKey('raw', hex2u8(hex), 'AES-GCM', false, ['encrypt', 'decrypt']);
 const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
 function linkOpen(code, role, onmsg, onstate){
   const sub = `pianodigital/${code}/${role === 'pc' ? 'up' : 'down'}`, pub = `pianodigital/${code}/${role === 'pc' ? 'down' : 'up'}`;
@@ -918,12 +923,15 @@ function linkOpen(code, role, onmsg, onstate){
   return { send(o){ o.s = sid; o.q = ++q; const str = JSON.stringify(o); for (const cl of clients) if (cl.connected) cl.publish(pub, str, { qos:0 }); },
            up: () => clients.filter(cl => cl.connected).length, close(){ clients.forEach(cl => { try { cl.end(true); } catch(e){} }); } };
 }
-const duo = { link:null, code:null, on:false, lastRx:0, lastSend:0, lastCfg:0 };
+const duo = { link:null, code:null, on:false, lastRx:0, lastSend:0, lastCfg:0, img:null };
 const TELE_FOV = 72;      // campo de visão horizontal típico de uma câmara de selfie (graus)
 function duoStart(){
   if (duo.link || typeof mqtt === 'undefined'){ renderPair(); return; }
-  duo.code = store.duoCode || (store.duoCode = String(10000 + Math.floor(Math.random()*90000))); save();
+  duo.code = store.duoCode || (store.duoCode = String(10000 + Math.floor(Math.random()*90000)));
+  if (!store.duoKey) store.duoKey = [...crypto.getRandomValues(new Uint8Array(16))].map(x => x.toString(16).padStart(2, '0')).join('');
+  save();
   duo.link = linkOpen(duo.code, 'pc', duoMsg, renderPair);
+  setInterval(() => { if (duoOn()) duoSend(performance.now()); }, 90);
   setInterval(() => { const on = performance.now() - duo.lastRx < 3000 && duo.lastRx > 0; if (on !== duo.on){ duo.on = on; if (!on) rzReleaseAll(); else banner(store.rz ? 'Telemóvel ligado.' : 'Telemóvel ligado. Clica em “Calibrar”.', 3500); renderPair(); } }, 500);
   renderPair();
 }
@@ -931,7 +939,7 @@ function renderPair(){
   const show = duoOn() && !duo.on;
   $('pairBox').style.display = show ? 'block' : 'none'; $('pip').style.display = duoOn() && duo.on ? 'block' : 'none';
   if (!duoOn()) return;
-  const url = location.origin + location.pathname + '?tele=' + (duo.code || '') + '&v=' + APP_VER;
+  const url = location.origin + location.pathname + '?tele=' + (duo.code || '') + '&k=' + (store.duoKey || '') + '&v=' + APP_VER;
   $('pairCode').textContent = duo.code || '–';
   if (location.protocol === 'file:'){ $('pairHelp').innerHTML = 'Para usar o telemóvel, a app tem de ser aberta pelo endereço <b>https</b> onde está publicada (não como ficheiro).'; $('pairQR').innerHTML = ''; }
   else if (typeof qrcode !== 'undefined' && duo.code){ const q = qrcode(0, 'M'); q.addData(url); q.make(); $('pairQR').innerHTML = q.createSvgTag({ cellSize:4, margin:1, scalable:true }); }
@@ -948,6 +956,9 @@ function duoMsg(d){
   if (d.k === 't' && c){ rzNotes({ touches: d.t.map(q => ({ x:q[0], xs:q[1], w:q[2], pen:q[3], pens:q[4], snd:!!q[5], vel:q[6] })), hovers:[] }, t, c); duoPip(); }
   else if (d.k === 'h' && c){ if (rz.touches.length || rz.active.size) rzNotes({ touches:[], hovers:[] }, t, c); duoPip(); }
   else if (d.k === 'msg') banner(d.m, d.ms || undefined);
+  else if (d.k === 'img' && store.duoKey){
+    (async () => { try { const u = unb64(d.d), key = await aesKey(store.duoKey); const pt = await crypto.subtle.decrypt({ name:'AES-GCM', iv:u.slice(0, 12) }, key, u.slice(12)); duo.img = await createImageBitmap(new Blob([pt], { type:'image/jpeg' })); duoPip(); } catch(e){} })();
+  }
   else if (d.k === 'cal'){
     const cols = []; for (const [x1, x2] of d.r) for (let x = x1; x <= x2; x++) cols.push(x);
     store.rz = { a:d.a, b:d.b, b0:d.b, wr:d.wr, x0:d.x0, pb:0, thr:7, flip:false, sideOk:true, vw:d.vw, vh:d.vh };
@@ -955,13 +966,16 @@ function duoMsg(d){
     banner(store.rz.duo ? `Calibrado. O telemóvel vê o toque e o portátil reconhece os dedos (${store.rz.duo.n} dedos usados para alinhar as duas câmaras).` : 'Calibrado, mas o portátil não estava a ver os dedos: as teclas vão sair só pela posição lateral. Confirma que a câmara do portátil vê as mãos e recalibra.', 6000);
   }
 }
-// Faixa esquemática do que o telemóvel está a detetar (linha da mesa e toques)
+// O que o telemóvel está a ver: miniatura da câmara (atualizada ~1 vez por segundo), linha da mesa e toques
 function duoPip(){
-  const cv = $('pip'), g = cv.getContext('2d'); if (cv.height !== 56) cv.height = 56;
-  const k = cv.width/RZW; g.fillStyle = '#020b0a'; g.fillRect(0, 0, cv.width, 56);
-  g.strokeStyle = AQ_HI; g.lineWidth = 1.5; g.beginPath(); g.moveTo(0, 38); g.lineTo(cv.width, 38); g.stroke();
-  g.fillStyle = '#86aaa5'; g.font = '11px Inter, system-ui'; g.textAlign = 'left'; g.fillText('Telemóvel: toques na mesa', 8, 14);
-  for (const q of rz.touches){ g.beginPath(); g.arc(q.xs*k, 38, 7, 0, Math.PI*2); g.fillStyle = q.snd ? (q.f != null ? FINGER_COLORS[q.f] : AQ_HI) : 'rgba(255,255,255,0.35)'; g.fill(); }
+  const cv = $('pip'), g = cv.getContext('2d'), W = cv.width, IH = Math.round(W*9/16), H = IH + 30; if (cv.height !== H) cv.height = H;
+  const k = W/RZW, c = store.rz; g.fillStyle = '#020b0a'; g.fillRect(0, 0, W, H);
+  if (duo.img) g.drawImage(duo.img, 0, 0, W, IH);
+  else { g.fillStyle = '#86aaa5'; g.font = '12px Inter, system-ui'; g.textAlign = 'center'; g.fillText('À espera da imagem do telemóvel…', W/2, IH/2); }
+  const ly = x => c ? (c.a*x + c.b)*k : IH*0.7;
+  if (c){ g.strokeStyle = AQ_HI; g.lineWidth = 1.5; g.beginPath(); g.moveTo(0, ly(0)); g.lineTo(W, ly(RZW)); g.stroke(); }
+  for (const q of rz.touches){ g.beginPath(); g.arc(q.xs*k, ly(q.xs), 7, 0, Math.PI*2); g.fillStyle = q.snd ? (q.f != null ? FINGER_COLORS[q.f] : AQ_HI) : 'rgba(255,255,255,0.35)'; g.fill(); }
+  g.fillStyle = '#86aaa5'; g.font = '11px Inter, system-ui'; g.textAlign = 'left'; g.fillText(`Câmara do telemóvel · ${rz.touches.length} toque(s)` + (c ? '' : ' · por calibrar'), 8, IH + 19);
 }
 // Toque na imagem do telemóvel (posição lateral x) → dedo e tecla vistos pela câmara do portátil.
 function duoToKey(tc, pv){
@@ -1039,6 +1053,19 @@ function startTele(){
       else if (d.k === 'cmd' && d.c === 'cal') startRzCal();
     }, () => { $('teleDbg').textContent = `${APP_VER} · retransmissores ligados: ${tele.link ? tele.link.up() : 0}/${BROKERS.length}`; });
     setInterval(() => { if (tele.link && !rz.touches.length) teleSendTouches([]); }, 250);
+    // miniatura da câmara (160×90, cifrada) para o portátil mostrar o que o telemóvel vê
+    const TK = new URLSearchParams(location.search).get('k');
+    if (TK && TK.length === 32 && crypto.subtle){
+      const tc = document.createElement('canvas'); tc.width = 160; tc.height = 90; const tg = tc.getContext('2d'); let key = null;
+      setInterval(async () => { try {
+        if (!tele.link || !tele.link.up() || v.readyState < 2) return;
+        if (!key) key = await aesKey(TK);
+        tg.drawImage(v, 0, 0, 160, 90);
+        const blob = await new Promise(r => tc.toBlob(r, 'image/jpeg', 0.4)), iv = crypto.getRandomValues(new Uint8Array(12));
+        const ct = new Uint8Array(await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, await blob.arrayBuffer())), out = new Uint8Array(12 + ct.length);
+        out.set(iv); out.set(ct, 12); tele.link.send({ k:'img', d:b64(out) });
+      } catch(e){} }, 1200);
+    }
     setTimeout(() => { if (!tele.st) msg('Ainda sem resposta do portátil. Confirma que o portátil está no modo “Portátil + telemóvel” com este código, e que os dois têm internet.', 'var(--warn)'); }, 9000);
     // ciclo de análise da câmara do telemóvel
     const step = () => { if (v.readyState >= 2 && v.videoWidth){ rzSize(); try { rzFrame(performance.now()/1000); } catch(e){ console.warn(e); } } };
@@ -1067,6 +1094,8 @@ function startTele(){
       if (d.song){ g.textAlign = 'center'; g.fillStyle = '#d8efec'; g.fillText(d.song, W/2, H*0.26); }
       if (performance.now() - tele.t > 2500){ g.textAlign = 'center'; g.fillStyle = '#ffb84d'; g.fillText('Sem dados do portátil…', W/2, H*0.13); }
     }
+    g.textAlign = 'right'; g.textBaseline = 'alphabetic'; g.font = `${Math.round(10*dpr)}px ui-monospace, monospace`; g.fillStyle = '#4f6f6b';
+    g.fillText(`${APP_VER} · retransmissores ${tele.link ? tele.link.up() : 0}/${BROKERS.length} · último estado há ${tele.t ? ((performance.now() - tele.t)/1000).toFixed(1) : '–'} s · calibrado: ${store.rz ? 'sim' : 'não'} · toques: ${rz.touches.length}`, W - 8*dpr, H - 6*dpr);
     // instruções de calibração e avisos (por cima do piano)
     if (tele.banner && performance.now() < tele.bannerT){
       g.font = `600 ${Math.round(H*0.06)}px Inter, system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -1913,7 +1942,7 @@ function onFrame(meta){
 let uiLast = performance.now();
 function uiLoop(now){
   const dt = Math.min(0.1, (now - uiLast)/1000); uiLast = now;
-  micTick(now); practiceTick(dt); drawFall(); drawGraph(); if (duoOn()) duoSend(now);
+  micTick(now); practiceTick(dt); drawFall(); drawGraph();
   requestAnimationFrame(uiLoop);
 }
 
