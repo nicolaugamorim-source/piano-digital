@@ -813,7 +813,7 @@ function rzToKey(x, pen){
 }
 const rzKeyX = a => store.rz.x0 - (store.rz.flip ? -1 : 1)*(a - PW/2)*rzGeom().keyPx/KW;        // mm no teclado → px de processamento (na linha das brancas)
 function rzReleaseAll(){ for (const m of rz.active.keys()) noteOff(m); rz.active.clear(); rz.prev = []; rz.touches = []; rz.hovers = []; rz.tracks = []; rz.hist = []; rz.accC = null; rz.gapS = null; }
-function rzGrab(y0, h){ if (rz.cv.width !== RZW || rz.cv.height !== h){ rz.cv.width = RZW; rz.cv.height = h; } rz.ctx.filter = 'blur(1.2px)'; const v = rzSrc(); rz.ctx.drawImage(v, 0, y0/rz.sc, v.videoWidth, h/rz.sc, 0, 0, RZW, h); return rz.ctx.getImageData(0, 0, RZW, h).data; }
+function rzGrab(y0, h){ if (rz.cv.width !== RZW || rz.cv.height !== h){ rz.cv.width = RZW; rz.cv.height = h; } rz.ctx.filter = SOLO ? 'none' : 'blur(1.2px)'; const v = rzSrc(); rz.ctx.drawImage(v, 0, y0/rz.sc, v.videoWidth, h/rz.sc, 0, 0, RZW, h); return rz.ctx.getImageData(0, 0, RZW, h).data; }
 function rzFrame(t){
   const c = store.rz, dt = Math.max(1e-3, t - rz.lastT); rz.lastT = t;
   if (rz.calib){ rzCalFrame(); return; }
@@ -938,7 +938,7 @@ function rzNotes(res, t, c){
 // cada dedo que cruza a linha). O portátil reconhece os DEDOS na sua câmara (MediaPipe) e junta as duas coisas.
 // Como as mensagens são minúsculas, vão por um retransmissor público (MQTT sobre WebSocket seguro): funciona mesmo em
 // redes/firewalls que bloqueiam ligações diretas entre aparelhos. Não é enviada imagem nenhuma.
-const APP_VER = 'v19';
+const APP_VER = 'v20';
 // Miniatura da câmara do telemóvel: vai cifrada (AES-GCM) com uma chave que só existe no código QR, nunca no retransmissor.
 const b64 = u8 => { let q = ''; for (let i = 0; i < u8.length; i++) q += String.fromCharCode(u8[i]); return btoa(q); };
 const unb64 = t => { const q = atob(t), u = new Uint8Array(q.length); for (let i = 0; i < q.length; i++) u[i] = q.charCodeAt(i); return u; };
@@ -1858,11 +1858,17 @@ function drawRz(c, lw){
   }
   // linha de contacto
   const a0 = D(0, ly(0)), a1 = D(RZW, ly(RZW));
-  if (showLine){ c.shadowColor = AQ_HI; c.shadowBlur = 10*lw; c.strokeStyle = AQ_HI; c.lineWidth = 1.5*lw; c.beginPath(); c.moveTo(a0[0], a0[1]); c.lineTo(a1[0], a1[1]); c.stroke(); c.shadowBlur = 0; }
+  if (showLine){ c.shadowColor = AQ_HI; c.shadowBlur = SOLO ? 0 : 10*lw; c.strokeStyle = AQ_HI; c.lineWidth = 1.5*lw; c.beginPath(); c.moveTo(a0[0], a0[1]); c.lineTo(a1[0], a1[1]); c.stroke(); c.shadowBlur = 0; }
   // contorno de baixo da pele (diagnóstico)
   if (S.showDebug && rz.yl){ c.fillStyle = '#ff7a6b'; for (let x = 0; x < RZW; x += 2) if (rz.yl[x] >= 0){ const p = D(x, rz.yl[x] + rz.yTop); c.fillRect(p[0]-1, p[1]-1, 2.5*lw, 2.5*lw); } }
   const tag = (m, x, y) => { if (showKeys || m == null) return; const t = noteLabel(m) || midiName(m); c.font = `600 ${12*lw}px Inter, system-ui`; c.fillStyle = '#eafaf7'; c.fillText(t, x, y + 20*lw); };
   const num = (f, x, y) => { c.font = `700 ${10*lw}px Inter, system-ui`; c.fillStyle = '#021110'; c.fillText(String(f+1), x, y + 0.5); };
+  if (SOLO){
+    c.strokeStyle = AQ_HI; c.fillStyle = AQ_HI; c.lineWidth = 2.5*lw;
+    for (const h of rz.hovers){ const p = D(h.x, h.y != null ? h.y : ly(h.x) - h.gap); c.beginPath(); c.arc(p[0], p[1], 8*lw, 0, Math.PI*2); c.stroke(); }
+    for (const q of rz.touches){ const p = D(q.xs, ly(q.xs) + Math.min(q.pens, 0)); c.beginPath(); c.arc(p[0], p[1], 8*lw, 0, Math.PI*2); if (q.snd) c.fill(); c.stroke(); }
+    return;
+  }
   for (const h of rz.hovers){
     const p = D(h.x, h.y != null ? h.y : ly(h.x) - h.gap);
     c.beginPath(); c.arc(p[0], p[1], 7.5*lw, 0, Math.PI*2);
@@ -1994,11 +2000,12 @@ function onFrame(meta){
     const capR = meta && meta.captureTime ? meta.captureTime : t0;
     lastFrameT = capR/1000; rzSize();
     // Reconhecimento dos dedos (quando a câmara os consegue ver): serve para pôr as bolas nas pontas reais e saber qual dedo tocou.
-    if (landmarker && !(SOLO && (rz.fn = (rz.fn|0) + 1) % 2)){ let ts = Math.round(t0); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; try { processResults(landmarker.detectForVideo(video, ts), lastFrameT); } catch(e){ console.warn(e); } }
+    // telemóvel: mãos reconhecidas → 1 em cada 2 fotogramas; mãos não encontradas → só volta a procurar de 10 em 10 (procurar é o passo mais lento)
+    if (landmarker && (!SOLO || (rz.fn = (rz.fn|0) + 1) % (lastFrameT - Math.max(hands.L.lastSeen || -9, hands.R.lastSeen || -9) < 0.6 ? 2 : 10) === 0)){ let ts = Math.round(t0); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; try { processResults(landmarker.detectForVideo(video, ts), lastFrameT); } catch(e){ console.warn(e); } }
     try { rzFrame(lastFrameT); } catch(e){ console.warn(e); }
     drawOverlay(); updateDots();
     const t2 = performance.now(); inferEMA = inferEMA ? 0.9*inferEMA + 0.1*(t2 - t0) : t2 - t0; fpsCount++;
-    if (t2 - fpsT > 1000){ fpsNow = Math.round(fpsCount*1000/(t2 - fpsT)); fpsCount = 0; fpsT = t2; const txt = `${fpsNow} FPS · análise ${inferEMA.toFixed(0)} ms · câmara ${vw}×${vh} · dedos reconhecidos: ${rz.mp ? 'sim' : 'não (a usar só a cor da pele)'}`; $('perf').textContent = txt; $('camInfo').textContent = txt; }
+    if (t2 - fpsT > 1000){ fpsNow = Math.round(fpsCount*1000/(t2 - fpsT)); fpsCount = 0; fpsT = t2; if (SOLO) $('verTag').textContent = `${APP_VER} · ${fpsNow} FPS`; const txt = `${fpsNow} FPS · análise ${inferEMA.toFixed(0)} ms · câmara ${vw}×${vh} · dedos reconhecidos: ${rz.mp ? 'sim' : 'não (a usar só a cor da pele)'}`; $('perf').textContent = txt; $('camInfo').textContent = txt; }
     return;
   }
   if (!landmarker) return;
