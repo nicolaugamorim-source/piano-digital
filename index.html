@@ -953,7 +953,7 @@ function rzNotes(res, t, c){
 // cada dedo que cruza a linha). O portátil reconhece os DEDOS na sua câmara (MediaPipe) e junta as duas coisas.
 // Como as mensagens são minúsculas, vão por um retransmissor público (MQTT sobre WebSocket seguro): funciona mesmo em
 // redes/firewalls que bloqueiam ligações diretas entre aparelhos. Não é enviada imagem nenhuma.
-const APP_VER = 'v22';
+const APP_VER = 'v23';
 // Miniatura da câmara do telemóvel: vai cifrada (AES-GCM) com uma chave que só existe no código QR, nunca no retransmissor.
 const b64 = u8 => { let q = ''; for (let i = 0; i < u8.length; i++) q += String.fromCharCode(u8[i]); return btoa(q); };
 const unb64 = t => { const q = atob(t), u = new Uint8Array(q.length); for (let i = 0; i < q.length; i++) u[i] = q.charCodeAt(i); return u; };
@@ -1365,57 +1365,80 @@ function startRec(){
 
 // Microfone (opcional): o som do dedo a bater na mesa confirma que houve contacto e ensina a altura da mesa.
 /*HEAR-BEGIN*/
-// Altura da nota tocada (uma de cada vez) pelo método YIN: procura o período em que o som se repete.
+// Altura da nota tocada pelo método YIN: procura o período em que o som se repete. Usa as amostras MAIS RECENTES (menos atraso).
+// Devolve a frequência (0 = sem nota clara) e a curva cm[tau] (perto de 0 = o som repete-se com esse período).
 function yinPitch(x, sr){
-  const W = 1024, tMin = Math.max(2, Math.floor(sr/2200)), tMax = Math.min(x.length - W - 1, Math.ceil(sr/60));
+  const W = 1024, tMin = Math.max(2, Math.floor(sr/2200)), tMax = Math.min(x.length - W - 2, Math.ceil(sr/60)), o = x.length - W - tMax - 1;
   const cm = new Float32Array(tMax + 2); let run = 0; cm[0] = 1;
   for (let tau = 1; tau <= tMax; tau++){
-    let s = 0; for (let j = 0; j < W; j++){ const d = x[j] - x[j+tau]; s += d*d; }
+    let s = 0; for (let j = o; j < o + W; j++){ const d = x[j] - x[j+tau]; s += d*d; }
     run += s; cm[tau] = run > 0 ? s*tau/run : 1;
   }
   let best = -1;
   for (let tau = tMin; tau < tMax; tau++) if (cm[tau] < 0.15){ while (tau + 1 < tMax && cm[tau+1] < cm[tau]) tau++; best = tau; break; }
-  if (best < 0){ let mn = 1; for (let tau = tMin; tau < tMax; tau++) if (cm[tau] < mn){ mn = cm[tau]; best = tau; } if (mn > 0.3) return 0; }
+  if (best < 0){ let mn = 1; for (let tau = tMin; tau < tMax; tau++) if (cm[tau] < mn){ mn = cm[tau]; best = tau; } if (mn > 0.3) return { f:0, cm, tMax }; }
   const a = cm[best-1], b = cm[best], c = cm[best+1], den = a - 2*b + c, off = den > 1e-9 ? 0.5*(a - c)/den : 0;
-  return sr/(best + Math.max(-1, Math.min(1, off)));
+  return { f: sr/(best + Math.max(-1, Math.min(1, off))), cm, tMax };
+}
+// A nota esperada está a soar? Vê se o som se repete com o período dessa nota (funciona mesmo quando o YIN escolhe outra oitava).
+function yinHas(r, sr, midi){
+  const tau = sr/(440*Math.pow(2, (midi - 69)/12)); if (tau < 3 || tau > r.tMax - 2) return false;
+  // o mínimo da curva tem de estar MESMO no período desta nota (e não no de uma tecla vizinha): procura-o numa janela de ±4 %
+  const lo = Math.max(2, Math.floor(tau*0.96)), hi = Math.min(r.tMax - 1, Math.ceil(tau*1.04)); let bt = lo;
+  for (let t = lo; t <= hi; t++) if (r.cm[t] < r.cm[bt]) bt = t;
+  if (bt === lo || bt === hi || r.cm[bt] >= 0.17) return false;
+  const a = r.cm[bt-1], b = r.cm[bt], c = r.cm[bt+1], den = a - 2*b + c, tm = bt + (den > 1e-9 ? 0.5*(a - c)/den : 0);
+  return Math.abs(tm - tau) < Math.max(0.35, 0.022*tau);
 }
 /*HEAR-END*/
-const hear = { on:false, an:null, buf:null, x:null, sr:24000, cur:null, n:0, fired:null, firedT:0, rmsMin:1, noise:0.003, silent:0, lit:null };
+const hear = { on:false, an:null, buf:null, x:null, sr:24000, cur:null, n:0, nE:0, fired:null, firedT:0, rmsMin:1, noise:0.003, silent:0, lit:null };
 async function startListen(){
   if (hear.on) return;
   try {
     const st = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false } });
-    const ctx = new (window.AudioContext || window.webkitAudioContext)(); await ctx.resume();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint:'interactive' }); await ctx.resume();
     const src = ctx.createMediaStreamSource(st), an = ctx.createAnalyser(); an.fftSize = 4096; an.smoothingTimeConstant = 0; src.connect(an);
     Object.assign(hear, { on:true, an, buf:new Float32Array(4096), x:new Float32Array(2048), sr:ctx.sampleRate/2 });
-    setInterval(hearTick, 30);
+    setInterval(hearTick, 20);
     try { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {}); } catch(e){}
     renderCalStatus();
-    if (!practice.groups.length){ $('stageMsg').textContent = 'A ouvir. Abre “Prática”, escolhe uma música e toca em “Iniciar”.'; }
+    if (!practice.groups.length) $('stageMsg').textContent = 'A ouvir. Abre “Prática”, escolhe uma música e toca em “Iniciar”.';
   } catch(e){ banner('Não consegui abrir o microfone (' + (e.name || e) + '). Permite o microfone para este site.', 5000); }
+}
+function hearFire(m, mm, rms, now, press){
+  hear.fired = m; hear.firedT = now; hear.rmsMin = rms; hear.n = 0; hear.nE = 0;
+  while (mm < LOW) mm += 12; while (mm > HIGH) mm -= 12;
+  if (hear.lit != null) pianoKey(hear.lit, false); hear.lit = mm; pianoKey(mm, true, 'mouse', null);
+  $('ltNote').textContent = noteLabel(mm) || midiName(mm); $('ltWho').textContent = 'ouvido pelo microfone';
+  if (press) practiceOnPress(mm, 'mouse', null);
 }
 function hearTick(){
   hear.an.getFloatTimeDomainData(hear.buf);
   const x = hear.x; for (let i = 0; i < 2048; i++) x[i] = 0.5*(hear.buf[2*i] + hear.buf[2*i+1]);
-  let e = 0; for (let i = 1024; i < 2048; i++) e += x[i]*x[i]; const rms = Math.sqrt(e/1024);
-  if (rms < Math.max(0.006, hear.noise*4)){
+  let e = 0; for (let i = 1536; i < 2048; i++) e += x[i]*x[i]; const rms = Math.sqrt(e/512), now = performance.now();
+  if (rms < Math.max(0.004, hear.noise*3.5)){
     hear.noise = Math.min(0.02, 0.95*hear.noise + 0.05*rms);
-    if (++hear.silent > 4){ if (hear.lit != null){ pianoKey(hear.lit, false); hear.lit = null; } hear.fired = null; hear.cur = null; hear.n = 0; hear.rmsMin = rms; }
+    if (++hear.silent > 6){ if (hear.lit != null){ pianoKey(hear.lit, false); hear.lit = null; } hear.fired = null; hear.cur = null; hear.n = 0; hear.nE = 0; hear.rmsMin = rms; }
     return;
   }
   hear.silent = 0; hear.rmsMin = Math.min(hear.rmsMin, rms);
-  const f = yinPitch(x, hear.sr); if (!f){ hear.n = 0; return; }
-  const m = Math.round(69 + 12*Math.log2(f/440)); if (m < 36 || m > 98){ hear.n = 0; return; }
+  const again = rms > 1.6*hear.rmsMin && now - hear.firedT > 140;       // o volume voltou a subir: nota tocada outra vez
+  const r = yinPitch(x, hear.sr), m = r.f ? Math.round(69 + 12*Math.log2(r.f/440)) : null, exps = [...expectedSet()];
+  // 1) a nota que a música espera: aceita-se logo que soa (também noutra oitava), com 2 leituras seguidas (≈ 40 ms)
+  const q = exps.find(v => (m != null && (v - m) % 12 === 0) || yinHas(r, hear.sr, v));
+  if (q != null){
+    hear.nE++;
+    if (hear.nE >= 2 && (hear.fired !== q || again)) hearFire(q, q, rms, now, true);
+    return;
+  }
+  hear.nE = 0;
+  // 2) outra nota qualquer: só conta se for estável (≈ 100 ms), não logo a seguir a uma nota certa, e não for um harmónico dela
+  if (m == null || m < 36 || m > 98){ hear.n = 0; return; }
   if (m === hear.cur) hear.n++; else { hear.cur = m; hear.n = 1; }
-  const exp = [...expectedSet()].find(q => (q - m) % 12 === 0), now = performance.now();   // aceita a nota certa noutra oitava (o microfone engana-se na oitava)
-  if (hear.n < (exp != null ? 2 : 3)) return;
-  const again = hear.fired === m && rms > 1.8*hear.rmsMin && now - hear.firedT > 150;      // a mesma nota tocada outra vez
+  if (hear.n < 5 || now - hear.firedT < 180) return;
+  if (hear.fired != null && [0, 12, 19, 24, -12].includes(m - hear.fired) && !again) return;
   if (hear.fired === m && !again) return;
-  hear.fired = m; hear.firedT = now; hear.rmsMin = rms;
-  let mm = exp != null ? exp : m; while (mm < LOW) mm += 12; while (mm > HIGH) mm -= 12;
-  if (hear.lit != null) pianoKey(hear.lit, false); hear.lit = mm; pianoKey(mm, true, 'mouse', null);
-  $('ltNote').textContent = noteLabel(mm) || midiName(mm); $('ltWho').textContent = 'ouvido pelo microfone';
-  practiceOnPress(mm, 'mouse', null);
+  hearFire(m, m, rms, now, true);
 }
 const mic = { on:false, an:null, buf:null, noise:1e-4, prev:0, last:0, onsets:[], count:0 };
 let lastNoteOnMs = -1e9;
