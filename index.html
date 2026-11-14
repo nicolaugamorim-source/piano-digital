@@ -938,7 +938,7 @@ function rzNotes(res, t, c){
 // cada dedo que cruza a linha). O portátil reconhece os DEDOS na sua câmara (MediaPipe) e junta as duas coisas.
 // Como as mensagens são minúsculas, vão por um retransmissor público (MQTT sobre WebSocket seguro): funciona mesmo em
 // redes/firewalls que bloqueiam ligações diretas entre aparelhos. Não é enviada imagem nenhuma.
-const APP_VER = 'v20';
+const APP_VER = 'v21';
 // Miniatura da câmara do telemóvel: vai cifrada (AES-GCM) com uma chave que só existe no código QR, nunca no retransmissor.
 const b64 = u8 => { let q = ''; for (let i = 0; i < u8.length; i++) q += String.fromCharCode(u8[i]); return btoa(q); };
 const unb64 = t => { const q = atob(t), u = new Uint8Array(q.length); for (let i = 0; i < q.length; i++) u[i] = q.charCodeAt(i); return u; };
@@ -1960,6 +1960,7 @@ async function startCamera(){
     const v = { width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:60 } };
     if (S.deviceId) v.deviceId = { exact:S.deviceId };
     else if (SOLO){ v.facingMode = 'user'; v.frameRate = { ideal:30 }; }
+    if (SOLO){ v.width = { ideal:640 }; v.height = { ideal:360 }; }      // a análise do toque já corre a 640 px: imagem maior só gasta tempo
     if (SOLO){
       try { document.documentElement.requestFullscreen().then(() => screen.orientation.lock('landscape')).catch(() => {}); } catch(e){}
       try { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {}); } catch(e){}
@@ -2001,11 +2002,11 @@ function onFrame(meta){
     lastFrameT = capR/1000; rzSize();
     // Reconhecimento dos dedos (quando a câmara os consegue ver): serve para pôr as bolas nas pontas reais e saber qual dedo tocou.
     // telemóvel: mãos reconhecidas → 1 em cada 2 fotogramas; mãos não encontradas → só volta a procurar de 10 em 10 (procurar é o passo mais lento)
-    if (landmarker && (!SOLO || (rz.fn = (rz.fn|0) + 1) % (lastFrameT - Math.max(hands.L.lastSeen || -9, hands.R.lastSeen || -9) < 0.6 ? 2 : 10) === 0)){ let ts = Math.round(t0); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; try { processResults(landmarker.detectForVideo(video, ts), lastFrameT); } catch(e){ console.warn(e); } }
+    if (landmarker && (!SOLO || (rz.fn = (rz.fn|0) + 1) % (lastFrameT - Math.max(hands.L.lastSeen || -9, hands.R.lastSeen || -9) < 0.6 ? (inferEMA > 28 ? 4 : 2) : 15) === 0)){ let ts = Math.round(t0); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; try { processResults(landmarker.detectForVideo(video, ts), lastFrameT); } catch(e){ console.warn(e); } }
     try { rzFrame(lastFrameT); } catch(e){ console.warn(e); }
     drawOverlay(); updateDots();
     const t2 = performance.now(); inferEMA = inferEMA ? 0.9*inferEMA + 0.1*(t2 - t0) : t2 - t0; fpsCount++;
-    if (t2 - fpsT > 1000){ fpsNow = Math.round(fpsCount*1000/(t2 - fpsT)); fpsCount = 0; fpsT = t2; if (SOLO) $('verTag').textContent = `${APP_VER} · ${fpsNow} FPS`; const txt = `${fpsNow} FPS · análise ${inferEMA.toFixed(0)} ms · câmara ${vw}×${vh} · dedos reconhecidos: ${rz.mp ? 'sim' : 'não (a usar só a cor da pele)'}`; $('perf').textContent = txt; $('camInfo').textContent = txt; }
+    if (t2 - fpsT > 1000){ fpsNow = Math.round(fpsCount*1000/(t2 - fpsT)); fpsCount = 0; fpsT = t2; if (SOLO) $('verTag').textContent = `${APP_VER} · ${fpsNow} FPS · ${inferEMA.toFixed(0)} ms · ${vw}×${vh}`; const txt = `${fpsNow} FPS · análise ${inferEMA.toFixed(0)} ms · câmara ${vw}×${vh} · dedos reconhecidos: ${rz.mp ? 'sim' : 'não (a usar só a cor da pele)'}`; $('perf').textContent = txt; $('camInfo').textContent = txt; }
     return;
   }
   if (!landmarker) return;
