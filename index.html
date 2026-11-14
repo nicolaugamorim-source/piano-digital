@@ -117,6 +117,8 @@ body.solo #view{width:100%;height:100%;max-width:none;max-height:none;object-fit
 body.solo header{position:fixed;top:0;left:0;right:0;height:40px;padding:0 8px;gap:2px;background:rgba(4,17,16,.55);border-bottom:0;box-shadow:none}
 body.solo .brand, body.solo #engSeg, body.solo #btnWizard{display:none}
 body.solo .nav{padding:4px 8px;min-height:32px;font-size:12px}
+body.solo #btnDiag{display:inline-block!important;padding:4px 10px;min-height:32px;font-size:12px}
+body.solo #verTag{display:inline!important;margin-right:6px}
 body.solo #btnMain{padding:4px 12px;min-height:32px;font-size:12px}
 body.solo #piano{position:fixed;left:0;right:0;bottom:0;height:26vh;background:rgba(2,11,10,.35);z-index:10}
 body.solo .key.black{background:rgba(3,16,15,.78)}
@@ -145,6 +147,8 @@ video#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none
   <span class="spacer"></span>
   <div class="seg" id="engSeg" style="margin:0;min-width:430px;grid-template-columns:1fr 1fr 1.2fr"><button data-eng="top">Portátil aberto</button><button data-eng="rz">Portátil dobrado</button><button data-eng="duo">Portátil + telemóvel</button></div>
   <button class="btn" id="btnWizard">Assistente</button>
+  <span id="verTag" class="small muted" style="display:none"></span>
+  <button class="btn" id="btnDiag" style="display:none">Diagnóstico</button>
   <button class="btn primary" id="btnMain">Ativar câmara</button>
 </header>
 
@@ -517,6 +521,17 @@ function rzLowest(m, W, H){
   }
   return yl;
 }
+// Igual, mas a procurar da linha da mesa para cima (lineAt(x) = linha nessa coluna). O que está abaixo da linha só conta se estiver
+// ligado ao dedo: numa mesa brilhante o REFLEXO do dedo aparece abaixo da linha e não pode ser confundido com um dedo pousado.
+function rzLowestAt(m, W, H, lineAt, tol){
+  const yl = new Float32Array(W);
+  for (let x = 0; x < W; x++){
+    yl[x] = -1; const L = lineAt(x);
+    for (let y = Math.min(H-1, Math.round(L) + tol); y >= 2; y--) if (m[y*W+x] && m[(y-1)*W+x] && m[(y-2)*W+x]){ yl[x] = y; break; }
+    if (yl[x] >= L - 1){ let q = yl[x]; while (q + 1 < H && m[(q+1)*W+x]) q++; yl[x] = q; }
+  }
+  return yl;
+}
 function rzMedian5(a){
   const o = new Float32Array(a.length), w = [0,0,0,0,0];
   for (let i = 0; i < a.length; i++){ for (let k = 0; k < 5; k++) w[k] = a[Math.max(0, Math.min(a.length-1, i+k-2))]; w.sort((p,q) => p-q); o[i] = w[2]; }
@@ -817,7 +832,7 @@ function rzFrame(t){
     else { const k = (Math.abs(cc - aC[i]) > 10 || Math.abs(yy - aY[i]) > 25) ? 1 : 0.3; aC[i] += k*(cc - aC[i]); aY[i] += k*(yy - aY[i]); }
     m[i] = (aC[i] > c.thr && aY[i] > 18 && !(bg && bg[i])) ? 1 : 0;
   }
-  const yl = rzLowest(m, RZW, h), raw = new Float32Array(RZW);
+  const yl = rzLowestAt(m, RZW, h, x => c.a*x + c.b - yTop, 2), raw = new Float32Array(RZW);
   // Precisão abaixo do píxel: interpola onde a cor de pele cruza o limiar entre o último píxel de pele e o seguinte.
   for (let x = 0; x < RZW; x++){ const y = yl[x]; if (y >= 0 && y + 1 < h){ const cA = aC[y*RZW+x] - c.thr, cB = aC[(y+1)*RZW+x] - c.thr; if (cA > 0 && cB < 0) yl[x] = y + cA/(cA - cB); } }
   // Sem mãos não há pontos: uma coluna só conta se tiver pele suficiente na vertical (um dedo, não um ponto de ruído ou um objeto pequeno),
@@ -923,7 +938,7 @@ function rzNotes(res, t, c){
 // cada dedo que cruza a linha). O portátil reconhece os DEDOS na sua câmara (MediaPipe) e junta as duas coisas.
 // Como as mensagens são minúsculas, vão por um retransmissor público (MQTT sobre WebSocket seguro): funciona mesmo em
 // redes/firewalls que bloqueiam ligações diretas entre aparelhos. Não é enviada imagem nenhuma.
-const APP_VER = 'v18';
+const APP_VER = 'v19';
 // Miniatura da câmara do telemóvel: vai cifrada (AES-GCM) com uma chave que só existe no código QR, nunca no retransmissor.
 const b64 = u8 => { let q = ''; for (let i = 0; i < u8.length; i++) q += String.fromCharCode(u8[i]); return btoa(q); };
 const unb64 = t => { const q = atob(t), u = new Uint8Array(q.length); for (let i = 0; i < q.length; i++) u[i] = q.charCodeAt(i); return u; };
@@ -1133,6 +1148,31 @@ function startTele(){
   requestAnimationFrame(draw);
 }
 
+// Diagnóstico: guarda 6 imagens da câmara (sem desenhos por cima) numa única folha PNG, com os dados da calibração,
+// para se poder afinar a deteção com imagens reais deste telemóvel, desta mesa e desta luz.
+function rzDiag(){
+  if (!stream){ banner('Ativa a câmara primeiro.', 2500); return; }
+  if (rzDiag.busy) return; rzDiag.busy = true; closePops();
+  const steps = ['Tira as mãos da mesa', 'Pousa as PONTAS dos dedos das duas mãos, como na calibração', 'Levanta todos os dedos cerca de 1 cm (mãos no mesmo sítio)',
+                 'Pousa só o INDICADOR DIREITO (os outros dedos no ar)', 'Pousa só o INDICADOR ESQUERDO (os outros dedos no ar)', 'Põe as mãos como quando tocas e carrega 3 teclas'];
+  const FW = 640, FH = Math.round(640*video.videoHeight/video.videoWidth), sheet = document.createElement('canvas'); sheet.width = 2*FW; sheet.height = 3*FH + 90;
+  const g = sheet.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, sheet.width, sheet.height);
+  const shot = i => { g.drawImage(video, (i % 2)*FW, Math.floor(i/2)*FH, FW, FH); };
+  steps.forEach((txt, i) => {
+    for (let k = 0; k < 4; k++) setTimeout(() => banner(`Diagnóstico ${i+1}/6 · ${txt}… ${4-k}`), i*4600 + k*1000);
+    setTimeout(() => { shot(i); banner('Registado.', 500); }, i*4600 + 4000);
+  });
+  setTimeout(() => {
+    const c = store.rz, tr = stream.getVideoTracks()[0], st = tr.getSettings ? tr.getSettings() : {};
+    const info = [`Piano Digital ${APP_VER} · ${new Date().toISOString()} · video ${video.videoWidth}x${video.videoHeight} @${st.frameRate || '?'} · ${fpsNow} FPS · analise ${inferEMA.toFixed(0)} ms`,
+      c ? `cal a=${c.a.toFixed(5)} b=${c.b.toFixed(2)} b0=${(c.b0 ?? c.b).toFixed(2)} wr=${c.wr.toFixed(1)} x0=${c.x0.toFixed(1)} pb=${c.pb.toFixed(2)} thr=${c.thr} flip=${c.flip ? 1 : 0} vw=${c.vw} vh=${c.vh} RZW=${RZW}` : 'sem calibracao',
+      `tau=${S.rzTauMm}mm batida=${S.rzStrike ? 1 : 0} keyScale=${S.rzKeyScale} pretas=${rzBlackMode()} maos=${rz.mp ? 'sim' : 'nao'} exp=${st.exposureMode || '?'} wb=${st.whiteBalanceMode || '?'}`,
+      navigator.userAgent.slice(0, 150)];
+    g.fillStyle = '#fff'; g.font = '15px monospace'; g.textBaseline = 'top'; info.forEach((t, i) => g.fillText(t, 8, 3*FH + 6 + i*20));
+    sheet.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'piano-digital-diagnostico.png'; document.body.appendChild(a); a.click(); a.remove();
+      banner('Diagnóstico guardado nas transferências: piano-digital-diagnostico.png', 6000); rzDiag.busy = false; }, 'image/png');
+  }, 6*4600 + 300);
+}
 async function camLock(on){
   try {
     const tr = stream && stream.getVideoTracks()[0]; if (!tr || !tr.getCapabilities) return;
@@ -2148,7 +2188,7 @@ $('wzClose').onclick = closeWizard;
 // ---------- Arranque ----------
 if (TELE !== null) startTele();
 else {
-  if (SOLO){ document.body.classList.add('solo'); S.engine = 'rz'; store.wizardDone = true; $('stageMsg').textContent = 'Deita o telemóvel de lado na mesa, à frente das mãos, com o ecrã virado para ti, e toca em “Ativar câmara”.'; }
+  if (SOLO){ document.body.classList.add('solo'); $('verTag').textContent = APP_VER; $('btnDiag').onclick = rzDiag; S.engine = 'rz'; store.wizardDone = true; $('stageMsg').textContent = 'Deita o telemóvel de lado na mesa, à frente das mãos, com o ecrã virado para ti, e toca em “Ativar câmara”.'; }
   setRange(); buildPiano(); buildSliders(); bindUI(); updateCam(); renderCalStatus(); resizeCanvases();
   requestAnimationFrame(uiLoop);
   if (S.engine === 'duo') duoStart();
