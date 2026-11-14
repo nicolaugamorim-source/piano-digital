@@ -131,6 +131,17 @@ body.solo .pop{top:44px;left:8px;width:min(360px,72vw);max-height:calc(100vh - 5
 body.solo #rzSlide{top:44%!important;right:6px!important;padding:4px!important}
 body.solo #rzY{height:110px!important}
 body.solo #fallWrap{bottom:26vh;height:34%}
+/* modo ouvir: sem câmara, notas a descer em ecrã inteiro e piano em baixo */
+body.listen #view, body.listen #btnDiag, body.listen #rzSlide{display:none!important}
+body.listen .nav:not([data-pop="practice"]){display:none}
+body.listen #piano{height:32vh;background:#020b0a}
+body.listen #fallWrap{top:40px;bottom:32vh;height:auto}
+body.listen #stageMsg{bottom:32vh}
+body.listen #songCard{width:200px;padding:6px 8px;right:8px}
+body.listen #songCard .ttl{font-size:12px;margin-bottom:4px}
+body.listen #songCard .seg button, body.listen #songCard .btn{min-height:28px;padding:3px 8px;font-size:12px}
+body.listen #scMode{display:none}
+body.listen #nowNote, body.listen #songCard, body.listen #feedback, body.listen #banner{z-index:6}
 video#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 </style>
 </head>
@@ -278,6 +289,8 @@ video#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none
   <h2>Prática</h2>
   <h3>Para experimentar</h3>
   <div class="col">
+    <button class="btn" id="exElise">Für Elise · início (Beethoven)</button>
+    <button class="btn" id="exOde">Hino da Alegria (Beethoven)</button>
     <button class="btn" id="exTest">Melodia de teste (arpejos)</button>
     <button class="btn" id="exScale">Escala de Dó maior (1‑2‑3‑1‑2‑3‑4‑5)</button>
     <button class="btn" id="exFive">5 dedos C‑D‑E‑F‑G</button>
@@ -383,7 +396,8 @@ const store = loadStore();
 const S = store.settings;
 // Calibração do motor rasante: uma para o modo "portátil dobrado" e outra para a câmara do telemóvel (modo duo).
 Object.defineProperty(store, 'rz', { get(){ return S.engine === 'duo' ? store._rzDuo : store._rzSolo; }, set(v){ if (S.engine === 'duo') store._rzDuo = v; else store._rzSolo = v; }, enumerable:false });
-const SOLO = new URLSearchParams(location.search).has('solo');   // modo só telemóvel: a app completa (câmara rasante) com disposição para ecrã pequeno
+const LISTEN = new URLSearchParams(location.search).has('ouvir');   // modo ouvir: sem câmara; o microfone ouve o piano verdadeiro e a app ensina a música
+const SOLO = LISTEN || new URLSearchParams(location.search).has('solo');   // modo só telemóvel: a app completa (câmara rasante) com disposição para ecrã pequeno
 const TELE = SOLO ? null : new URLSearchParams(location.search).get('tele');     // não nulo = esta página é o ecrã do telemóvel
 function save(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){} }
 
@@ -653,6 +667,7 @@ function computePiano(){
   renderCalStatus();
 }
 function renderCalStatus(msg){
+  if (LISTEN){ const b = $('btnMain'); b.textContent = hear.on ? 'A ouvir…' : 'Ativar microfone'; b.className = hear.on ? 'btn on' : 'btn primary'; $('rzSlide').style.display = 'none'; return; }
   if (rzOn()){
     const r = store.rz, ok = r && r.vw === rzSrc().videoWidth && r.vh === rzSrc().videoHeight;
     $('calStatus').innerHTML = ok ? `<span style="color:var(--aq-hi)">Modo rasante calibrado.</span> Dedo ≈ ${Math.round(r.wr)} px · teclas pretas: ${rzBlackMode() === 'depth' ? 'dedo avançado (' + r.pb.toFixed(1) + ' px)' : rzBlackMode() === 'lateral' ? 'entre as brancas' : 'desligadas'}.` : '<span class="muted">Modo rasante por calibrar.</span>';
@@ -938,7 +953,7 @@ function rzNotes(res, t, c){
 // cada dedo que cruza a linha). O portátil reconhece os DEDOS na sua câmara (MediaPipe) e junta as duas coisas.
 // Como as mensagens são minúsculas, vão por um retransmissor público (MQTT sobre WebSocket seguro): funciona mesmo em
 // redes/firewalls que bloqueiam ligações diretas entre aparelhos. Não é enviada imagem nenhuma.
-const APP_VER = 'v21';
+const APP_VER = 'v22';
 // Miniatura da câmara do telemóvel: vai cifrada (AES-GCM) com uma chave que só existe no código QR, nunca no retransmissor.
 const b64 = u8 => { let q = ''; for (let i = 0; i < u8.length; i++) q += String.fromCharCode(u8[i]); return btoa(q); };
 const unb64 = t => { const q = atob(t), u = new Uint8Array(q.length); for (let i = 0; i < q.length; i++) u[i] = q.charCodeAt(i); return u; };
@@ -1349,6 +1364,59 @@ function startRec(){
 }
 
 // Microfone (opcional): o som do dedo a bater na mesa confirma que houve contacto e ensina a altura da mesa.
+/*HEAR-BEGIN*/
+// Altura da nota tocada (uma de cada vez) pelo método YIN: procura o período em que o som se repete.
+function yinPitch(x, sr){
+  const W = 1024, tMin = Math.max(2, Math.floor(sr/2200)), tMax = Math.min(x.length - W - 1, Math.ceil(sr/60));
+  const cm = new Float32Array(tMax + 2); let run = 0; cm[0] = 1;
+  for (let tau = 1; tau <= tMax; tau++){
+    let s = 0; for (let j = 0; j < W; j++){ const d = x[j] - x[j+tau]; s += d*d; }
+    run += s; cm[tau] = run > 0 ? s*tau/run : 1;
+  }
+  let best = -1;
+  for (let tau = tMin; tau < tMax; tau++) if (cm[tau] < 0.15){ while (tau + 1 < tMax && cm[tau+1] < cm[tau]) tau++; best = tau; break; }
+  if (best < 0){ let mn = 1; for (let tau = tMin; tau < tMax; tau++) if (cm[tau] < mn){ mn = cm[tau]; best = tau; } if (mn > 0.3) return 0; }
+  const a = cm[best-1], b = cm[best], c = cm[best+1], den = a - 2*b + c, off = den > 1e-9 ? 0.5*(a - c)/den : 0;
+  return sr/(best + Math.max(-1, Math.min(1, off)));
+}
+/*HEAR-END*/
+const hear = { on:false, an:null, buf:null, x:null, sr:24000, cur:null, n:0, fired:null, firedT:0, rmsMin:1, noise:0.003, silent:0, lit:null };
+async function startListen(){
+  if (hear.on) return;
+  try {
+    const st = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:false, noiseSuppression:false, autoGainControl:false } });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)(); await ctx.resume();
+    const src = ctx.createMediaStreamSource(st), an = ctx.createAnalyser(); an.fftSize = 4096; an.smoothingTimeConstant = 0; src.connect(an);
+    Object.assign(hear, { on:true, an, buf:new Float32Array(4096), x:new Float32Array(2048), sr:ctx.sampleRate/2 });
+    setInterval(hearTick, 30);
+    try { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {}); } catch(e){}
+    renderCalStatus();
+    if (!practice.groups.length){ $('stageMsg').textContent = 'A ouvir. Abre “Prática”, escolhe uma música e toca em “Iniciar”.'; }
+  } catch(e){ banner('Não consegui abrir o microfone (' + (e.name || e) + '). Permite o microfone para este site.', 5000); }
+}
+function hearTick(){
+  hear.an.getFloatTimeDomainData(hear.buf);
+  const x = hear.x; for (let i = 0; i < 2048; i++) x[i] = 0.5*(hear.buf[2*i] + hear.buf[2*i+1]);
+  let e = 0; for (let i = 1024; i < 2048; i++) e += x[i]*x[i]; const rms = Math.sqrt(e/1024);
+  if (rms < Math.max(0.006, hear.noise*4)){
+    hear.noise = Math.min(0.02, 0.95*hear.noise + 0.05*rms);
+    if (++hear.silent > 4){ if (hear.lit != null){ pianoKey(hear.lit, false); hear.lit = null; } hear.fired = null; hear.cur = null; hear.n = 0; hear.rmsMin = rms; }
+    return;
+  }
+  hear.silent = 0; hear.rmsMin = Math.min(hear.rmsMin, rms);
+  const f = yinPitch(x, hear.sr); if (!f){ hear.n = 0; return; }
+  const m = Math.round(69 + 12*Math.log2(f/440)); if (m < 36 || m > 98){ hear.n = 0; return; }
+  if (m === hear.cur) hear.n++; else { hear.cur = m; hear.n = 1; }
+  const exp = [...expectedSet()].find(q => (q - m) % 12 === 0), now = performance.now();   // aceita a nota certa noutra oitava (o microfone engana-se na oitava)
+  if (hear.n < (exp != null ? 2 : 3)) return;
+  const again = hear.fired === m && rms > 1.8*hear.rmsMin && now - hear.firedT > 150;      // a mesma nota tocada outra vez
+  if (hear.fired === m && !again) return;
+  hear.fired = m; hear.firedT = now; hear.rmsMin = rms;
+  let mm = exp != null ? exp : m; while (mm < LOW) mm += 12; while (mm > HIGH) mm -= 12;
+  if (hear.lit != null) pianoKey(hear.lit, false); hear.lit = mm; pianoKey(mm, true, 'mouse', null);
+  $('ltNote').textContent = noteLabel(mm) || midiName(mm); $('ltWho').textContent = 'ouvido pelo microfone';
+  practiceOnPress(mm, 'mouse', null);
+}
 const mic = { on:false, an:null, buf:null, noise:1e-4, prev:0, last:0, onsets:[], count:0 };
 let lastNoteOnMs = -1e9;
 async function startMic(){
@@ -1653,6 +1721,7 @@ function loadSong(notes, name){
     if (g && n.time - g.time < 0.06){ if (!g.notes.some(x => x.midi === n.midi)) g.notes.push(n); }
     else groups.push({ time:n.time, notes:[n] });
   }
+  if (LISTEN){ for (const g of groups) g.notes = [g.notes.reduce((a, b) => b.midi > a.midi ? b : a)]; $('stageMsg').style.display = 'none'; }   // só a nota mais aguda de cada acorde
   Object.assign(practice, { name, groups, playing:false });
   resetPractice();
   $('scTitle').textContent = name; $('songCard').style.display = 'block'; $('fallWrap').style.display = 'block';
@@ -1695,11 +1764,26 @@ function exTest(){   // pequena melodia original de arpejos, com teclas brancas 
   const b = baseC(), os = [0,4,7,12, 9,5,2,5, 4,8,11,8, 7,3,0,3, 0,4,7,12];
   loadSong(os.map((o,i) => ({ midi:b+o, time:i*0.55, dur:0.45 })), 'Melodia de teste');
 }
+function exElise(){   // Beethoven, Für Elise (1810): primeiros compassos, mão direita
+  const u = 0.24, seq = [[76,0,1],[75,1,1],[76,2,1],[75,3,1],[76,4,1],[71,5,1],[74,6,1],[72,7,1],[69,8,2],[60,11,1],[64,12,1],[69,13,1],[71,14,2],[64,17,1],[68,18,1],[71,19,1],[72,20,2],[64,23,1],
+    [76,24,1],[75,25,1],[76,26,1],[75,27,1],[76,28,1],[71,29,1],[74,30,1],[72,31,1],[69,32,2],[60,35,1],[64,36,1],[69,37,1],[71,38,2],[64,41,1],[72,42,1],[71,43,1],[69,44,4]];
+  loadSong(seq.map(([m,t,d]) => ({ midi:m, time:t*u, dur:d*u*0.9 })), 'Für Elise · início');
+}
+function exOde(){     // Beethoven, 9.ª Sinfonia (1824): tema do Hino da Alegria
+  const q = 0.5, seq = [[64,1],[64,1],[65,1],[67,1],[67,1],[65,1],[64,1],[62,1],[60,1],[60,1],[62,1],[64,1],[64,1.5],[62,0.5],[62,2],
+    [64,1],[64,1],[65,1],[67,1],[67,1],[65,1],[64,1],[62,1],[60,1],[60,1],[62,1],[64,1],[62,1.5],[60,0.5],[60,2]];
+  let t = 0; loadSong(seq.map(([m,d]) => { const n = { midi:m, time:t*q, dur:d*q*0.9 }; t += d; return n; }), 'Hino da Alegria');
+}
 async function loadMidiFile(file){
   const MidiCtor = window.Midi?.Midi || window.Midi;
   const midi = new MidiCtor(await file.arrayBuffer());
   const notes = [];
-  midi.tracks.forEach(tr => tr.notes.forEach(n => notes.push({ midi:n.midi, time:n.time, dur:n.duration })));
+  let trs = midi.tracks.filter(tr => tr.notes.length);
+  if (LISTEN && trs.length > 1){   // o microfone segue uma nota de cada vez: fica só a pista mais aguda (normalmente a melodia / mão direita)
+    const avg = tr => tr.notes.reduce((p, n) => p + n.midi, 0)/tr.notes.length;
+    trs = [trs.reduce((a, b) => avg(b) > avg(a) ? b : a)];
+  }
+  trs.forEach(tr => tr.notes.forEach(n => notes.push({ midi:n.midi, time:n.time, dur:n.duration })));
   if (!notes.length){ banner('O ficheiro MIDI não tem notas.', 3000); return; }
   loadSong(notes, file.name.replace(/\.midi?$/i, ''));
 }
@@ -2199,7 +2283,10 @@ else {
   if (SOLO){ document.body.classList.add('solo'); $('verTag').textContent = APP_VER; $('btnDiag').onclick = rzDiag; S.engine = 'rz'; store.wizardDone = true; $('stageMsg').textContent = 'Deita o telemóvel de lado na mesa, à frente das mãos, com o ecrã virado para ti, e toca em “Ativar câmara”.'; }
   setRange(); buildPiano(); buildSliders(); bindUI(); updateCam(); renderCalStatus(); resizeCanvases();
   requestAnimationFrame(uiLoop);
-  if (S.engine === 'duo') duoStart();
+  $('exElise').onclick = exElise; $('exOde').onclick = exOde;
+  if (LISTEN){ document.body.classList.add('listen'); $('btnMain').onclick = startListen; renderCalStatus();
+    $('stageMsg').textContent = 'Põe o telemóvel perto do piano, toca em “Ativar microfone” e escolhe uma música em “Prática”.'; }
+  if (S.engine === 'duo' && !SOLO) duoStart();
   if (!store.wizardDone) openWizard(0);
 }
 </script>
