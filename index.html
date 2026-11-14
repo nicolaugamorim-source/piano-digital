@@ -109,9 +109,26 @@ body.tele header, body.tele main, body.tele #piano, body.tele .pop, body.tele #w
 #teleCv{position:absolute;inset:0;width:100%;height:100%;display:block}
 #teleStart{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:20px 22px;text-align:center;width:min(92vw,380px);z-index:3}
 #teleStart input{font:inherit;font-size:28px;letter-spacing:8px;text-align:center;width:100%;padding:10px;margin:10px 0;background:#020b0a;color:var(--text);border:1px solid var(--aq-dim);border-radius:10px}
-#soloBar{position:absolute;left:50%;top:8px;transform:translateX(-50%);display:none;gap:6px;z-index:3}
-#soloBar .btn{padding:6px 10px;font-size:12px}
 #teleVid{position:absolute;right:8px;top:8px;width:110px;border-radius:8px;opacity:.8;z-index:2;border:1px solid var(--aq-dim)}
+/* modo só telemóvel: câmara em ecrã inteiro, barra e piano por cima da imagem */
+body.solo{display:block}
+body.solo #stage{position:fixed;inset:0}
+body.solo #view{width:100%;height:100%;max-width:none;max-height:none;object-fit:cover;object-position:50% 75%}
+body.solo header{position:fixed;top:0;left:0;right:0;height:40px;padding:0 8px;gap:2px;background:rgba(4,17,16,.55);border-bottom:0;box-shadow:none}
+body.solo .brand, body.solo #engSeg, body.solo #btnWizard{display:none}
+body.solo .nav{padding:4px 8px;min-height:32px;font-size:12px}
+body.solo #btnMain{padding:4px 12px;min-height:32px;font-size:12px}
+body.solo #piano{position:fixed;left:0;right:0;bottom:0;height:26vh;background:rgba(2,11,10,.35);z-index:10}
+body.solo .key.black{background:rgba(3,16,15,.78)}
+body.solo #nowNote{left:8px;top:46px;padding:4px 10px;min-width:0}
+body.solo #nowNote .note{font-size:22px}
+body.solo #songCard{right:52px;top:46px;width:230px;padding:8px 10px}
+body.solo #feedback, body.solo #askSide{top:46px}
+body.solo #banner{font-size:15px;top:40%;padding:10px 14px;max-width:86%}
+body.solo .pop{top:44px;left:8px;width:min(360px,72vw);max-height:calc(100vh - 52px)}
+body.solo #rzSlide{top:44%!important;right:6px!important;padding:4px!important}
+body.solo #rzY{height:110px!important}
+body.solo #fallWrap{bottom:26vh;height:34%}
 video#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 </style>
 </head>
@@ -283,13 +300,12 @@ video#video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none
 <div id="teleUI">
   <canvas id="teleCv"></canvas>
   <video id="teleVid" playsinline muted autoplay></video>
-  <div id="soloBar"><button class="btn primary" id="soloCal">Calibrar</button><button class="btn" id="soloFlip">Inverter lados</button><button class="btn" id="soloDn">Oitava −</button><button class="btn" id="soloUp">Oitava +</button></div>
   <div id="teleStart" class="glass">
     <div style="font-weight:700;font-size:18px;color:#eafaf7">Piano Digital · telemóvel</div>
     <div class="small muted" style="margin-top:6px">Código que aparece no portátil</div>
     <input id="teleCode" inputmode="numeric" maxlength="5" aria-label="Código do portátil">
     <button class="btn primary" id="teleGo" style="width:100%">Ligar câmara e emparelhar</button>
-    <button class="btn" id="teleSolo" style="width:100%;margin-top:8px">Usar só o telemóvel (sem portátil)</button>
+    <a href="?solo=1" class="small" style="display:block;margin-top:10px;color:var(--aq-hi)">Usar só o telemóvel (sem portátil)</a>
     <div id="teleDbg" style="margin-top:8px;font:11px/1.4 ui-monospace,Consolas,monospace;color:var(--muted);word-break:break-word">v13</div>
     <div class="small" id="teleMsg" style="margin-top:10px;color:var(--muted)">Depois de ligar, deita o telemóvel de lado na mesa, à frente das mãos, com o ecrã virado para ti.</div>
   </div>
@@ -363,8 +379,8 @@ const store = loadStore();
 const S = store.settings;
 // Calibração do motor rasante: uma para o modo "portátil dobrado" e outra para a câmara do telemóvel (modo duo).
 Object.defineProperty(store, 'rz', { get(){ return S.engine === 'duo' ? store._rzDuo : store._rzSolo; }, set(v){ if (S.engine === 'duo') store._rzDuo = v; else store._rzSolo = v; }, enumerable:false });
-let SOLO = new URLSearchParams(location.search).has('solo');     // modo só telemóvel: deteta, escolhe a tecla e toca o som, sem portátil
-const TELE = SOLO ? '' : new URLSearchParams(location.search).get('tele');     // não nulo = esta página é o ecrã do telemóvel
+const SOLO = new URLSearchParams(location.search).has('solo');   // modo só telemóvel: a app completa (câmara rasante) com disposição para ecrã pequeno
+const TELE = SOLO ? null : new URLSearchParams(location.search).get('tele');     // não nulo = esta página é o ecrã do telemóvel
 function save(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }catch(e){} }
 
 /*MATH-BEGIN*/
@@ -759,9 +775,9 @@ function banner(msg, ms){
 
 // ---------- 4b. Motor rasante: estado, calibração e ciclo ----------
 const RZW = 640;
-const rz = { cv:document.createElement('canvas'), ctx:null, H:360, sc:0.5, bg:null, prev:[], prevGap:null, touches:[], hovers:[], active:new Map(), offT:new Map(), yTop:0, roiH:0, yl:null, calib:null, lastT:0, mp:false, tracks:[], hist:[], accC:null, accY:null, gapS:null };
+const rz = { cv:document.createElement('canvas'), ctx:null, H:360, sc:0.5, bg:null, prev:[], prevGap:null, touches:[], hovers:[], active:new Map(), offT:new Map(), missT:new Map(), yTop:0, roiH:0, yl:null, calib:null, lastT:0, mp:false, tracks:[], hist:[], accC:null, accY:null, gapS:null };
 rz.ctx = rz.cv.getContext('2d', { willReadFrequently:true });
-const rzOn = () => S.engine === 'rz', duoOn = () => S.engine === 'duo' && TELE === null;
+const rzOn = () => S.engine === 'rz', duoOn = () => S.engine === 'duo';
 const rzSrc = () => TELE !== null ? $('teleVid') : video;      // no telemóvel, a imagem rasante é a da sua própria câmara
 function rzSize(){ const v = rzSrc(); rz.sc = RZW/(v.videoWidth || 1280); rz.H = Math.round((v.videoHeight || 720)*rz.sc); }
 // teclado: posição lateral (px de processamento) ↔ mm no teclado; pen = px abaixo da linha (dedo mais perto da câmara)
@@ -849,7 +865,7 @@ function rzFrame(t){
   res.hovers = rz.tracks.filter(tr => tr.age >= 3);
   rz.prevGap = gap; rz.yl = yl; rz.yTop = yTop; rz.gap = gap;
   // No telemóvel fica por aqui: envia os toques ao portátil, que decide o dedo, a tecla e a nota.
-  if (TELE !== null && !SOLO){ rz.prev = res.touches; rz.touches = res.touches; rz.hovers = []; teleSendTouches(res.touches); return; }
+  if (TELE !== null){ rz.prev = res.touches; rz.touches = res.touches; rz.hovers = []; teleSendTouches(res.touches); return; }
   rzNotes(res, t, c);
 }
 // Segunda metade: dos toques às notas. No modo "portátil + telemóvel" os toques chegam do telemóvel.
@@ -893,7 +909,12 @@ function rzNotes(res, t, c){
     if (t - (rz.offT.get(midi) ?? -9) < 0.04) continue;
     rz.active.set(midi, 1); noteOn(midi, tc.vel || 0.5, tc.hand || ((tc.x < c.x0) !== !!c.flip ? 'R' : 'L'), tc.f ?? null);
   }
-  for (const midi of [...rz.active.keys()]) if (!now.has(midi)){ rz.active.delete(midi); rz.offT.set(midi, t); noteOff(midi); }
+  for (const midi of [...rz.active.keys()]){
+    if (now.has(midi)){ rz.missT.delete(midi); continue; }
+    const t0 = rz.missT.get(midi);
+    if (t0 == null && !duoOn()){ rz.missT.set(midi, t); continue; }     // só larga a nota se o dedo estiver fora há ≥ 45 ms
+    if (duoOn() || t - t0 >= 0.045){ rz.missT.delete(midi); rz.active.delete(midi); rz.offT.set(midi, t); noteOff(midi); }
+  }
   for (const h of res.hovers){ const k = rzToKey(h.x, 0); h.midi = k.key ? k.key.midi : null; h.a = k.a; }
   rz.prev = res.touches; rz.touches = res.touches; rz.hovers = res.hovers;
 }
@@ -902,7 +923,7 @@ function rzNotes(res, t, c){
 // cada dedo que cruza a linha). O portátil reconhece os DEDOS na sua câmara (MediaPipe) e junta as duas coisas.
 // Como as mensagens são minúsculas, vão por um retransmissor público (MQTT sobre WebSocket seguro): funciona mesmo em
 // redes/firewalls que bloqueiam ligações diretas entre aparelhos. Não é enviada imagem nenhuma.
-const APP_VER = 'v16';
+const APP_VER = 'v17';
 // Miniatura da câmara do telemóvel: vai cifrada (AES-GCM) com uma chave que só existe no código QR, nunca no retransmissor.
 const b64 = u8 => { let q = ''; for (let i = 0; i < u8.length; i++) q += String.fromCharCode(u8[i]); return btoa(q); };
 const unb64 = t => { const q = atob(t), u = new Uint8Array(q.length); for (let i = 0; i < q.length; i++) u[i] = q.charCodeAt(i); return u; };
@@ -1027,7 +1048,7 @@ function duoSend(now){
 }
 
 // ---------- 4d. Ecrã do telemóvel ----------
-const tele = { st:null, t:0, link:null, last:'', lastTx:0, banner:'', bannerT:0, solo:false, note:'' };
+const tele = { st:null, t:0, link:null, last:'', lastTx:0, banner:'', bannerT:0 };
 function teleSendTouches(ts){
   if (!tele.link) return;
   const now = performance.now(), r = v => Math.round(v*10)/10;
@@ -1076,32 +1097,9 @@ function startTele(){
     const step = () => { if (v.readyState >= 2 && v.videoWidth){ rzSize(); try { rzFrame(performance.now()/1000); } catch(e){ console.warn(e); } } };
     if ('requestVideoFrameCallback' in HTMLVideoElement.prototype){ const cb = () => { step(); v.requestVideoFrameCallback(cb); }; v.requestVideoFrameCallback(cb); } else setInterval(step, 33);
   };
-  setRange();
-  if (SOLO){ $('teleCode').style.display = 'none'; $('teleCode').previousElementSibling.style.display = 'none'; $('teleGo').style.display = 'none'; $('teleSolo').className = 'btn primary'; msg('Deita o telemóvel de lado na mesa, à frente das mãos, com o ecrã virado para ti.'); }
-  $('teleSolo').onclick = async () => {
-    initAudio().catch(() => {});      // o som tem de arrancar logo no toque do botão
-    msg('A abrir a câmara…');
-    let st;
-    try { st = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:30 } }, audio:false }); }
-    catch(e){ msg('Não consegui abrir a câmara (' + (e.name || e) + '). Permite a câmara para este site.', 'var(--bad)'); return; }
-    SOLO = true; if (tele.link){ tele.link.close(); tele.link = null; }
-    const v = $('teleVid'); v.srcObject = st; try { await v.play(); } catch(e){}
-    try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){}
-    try { await document.documentElement.requestFullscreen(); await screen.orientation.lock('landscape'); } catch(e){}
-    $('teleStart').style.display = 'none'; $('soloBar').style.display = 'flex'; tele.solo = true;
-    if (!store.rz) banner('Toca em “Calibrar” para começar.', 600000);
-    const step = () => { if (v.readyState >= 2 && v.videoWidth){ rzSize(); try { rzFrame(performance.now()/1000); } catch(e){ console.warn(e); } } };
-    if ('requestVideoFrameCallback' in HTMLVideoElement.prototype){ const cb = () => { step(); v.requestVideoFrameCallback(cb); }; v.requestVideoFrameCallback(cb); } else setInterval(step, 33);
-  };
-  $('soloCal').onclick = () => startRzCal();
-  $('soloFlip').onclick = () => { if (store.rz){ store.rz.flip = !store.rz.flip; save(); rzReleaseAll(); banner('Lados invertidos.', 1500); } };
-  const oct = d => { S.startOct = clamp(S.startOct + d, 0, 7 - S.octaves); save(); rzReleaseAll(); setRange(); };
-  $('soloDn').onclick = () => oct(-1); $('soloUp').onclick = () => oct(1);
-  const soloState = () => ({ lo:LOW, hi:HIGH, lab:S.labels, act:[...held.keys()], exp:[], note:tele.note || '', who: audioReady ? '' : 'a carregar o som…', song:'',
-    dots: store.rz ? [...rz.touches, ...rz.hovers].filter(q => q.a != null && q.a > -KW && q.a < PW + KW).map(q => [clamp(q.a/PW, 0, 1), q.black ? 1 : 0, q.f ?? null, q.snd ? 1 : 0]) : [] });
   const cv = $('teleCv'), g = cv.getContext('2d');
   const draw = () => {
-    const dpr = devicePixelRatio || 1, W = cv.width = Math.round(innerWidth*dpr), H = cv.height = Math.round(innerHeight*dpr), d = tele.solo ? soloState() : tele.st;
+    const dpr = devicePixelRatio || 1, W = cv.width = Math.round(innerWidth*dpr), H = cv.height = Math.round(innerHeight*dpr), d = tele.st;
     g.fillStyle = '#030908'; g.fillRect(0, 0, W, H);
     if (!d && $('teleStart').style.display === 'none'){ g.fillStyle = '#86aaa5'; g.textAlign = 'center'; g.font = `500 ${Math.round(H*0.05)}px Inter, system-ui`; g.fillText('Ligado. À espera do piano do portátil…', W/2, H/2); }
     if (d){
@@ -1120,10 +1118,10 @@ function startTele(){
       g.textAlign = 'left'; g.font = `700 ${Math.round(H*0.16)}px Inter, system-ui`; g.fillStyle = AQ_HI; g.shadowColor = AQ; g.shadowBlur = 14*dpr; g.fillText(d.note || '–', 14*dpr, H*0.13); g.shadowBlur = 0;
       g.font = `500 ${Math.round(H*0.045)}px Inter, system-ui`; g.fillStyle = '#86aaa5'; g.fillText(d.who || '', 14*dpr, H*0.26);
       if (d.song){ g.textAlign = 'center'; g.fillStyle = '#d8efec'; g.fillText(d.song, W/2, H*0.26); }
-      if (!tele.solo && performance.now() - tele.t > 2500){ g.textAlign = 'center'; g.fillStyle = '#ffb84d'; g.fillText('Sem dados do portátil…', W/2, H*0.13); }
+      if (performance.now() - tele.t > 2500){ g.textAlign = 'center'; g.fillStyle = '#ffb84d'; g.fillText('Sem dados do portátil…', W/2, H*0.13); }
     }
     g.textAlign = 'right'; g.textBaseline = 'alphabetic'; g.font = `${Math.round(10*dpr)}px ui-monospace, monospace`; g.fillStyle = '#4f6f6b';
-    g.fillText(tele.solo ? `${APP_VER} · só telemóvel · calibrado: ${store.rz ? 'sim' : 'não'} · toques: ${rz.touches.length}` : `${APP_VER} · retransmissores ${tele.link ? tele.link.up() : 0}/${BROKERS.length} · último estado há ${tele.t ? ((performance.now() - tele.t)/1000).toFixed(1) : '–'} s · calibrado: ${store.rz ? 'sim' : 'não'} · toques: ${rz.touches.length}`, W - 8*dpr, H - 6*dpr);
+    g.fillText(`${APP_VER} · retransmissores ${tele.link ? tele.link.up() : 0}/${BROKERS.length} · último estado há ${tele.t ? ((performance.now() - tele.t)/1000).toFixed(1) : '–'} s · calibrado: ${store.rz ? 'sim' : 'não'} · toques: ${rz.touches.length}`, W - 8*dpr, H - 6*dpr);
     // instruções de calibração e avisos (por cima do piano)
     if (tele.banner && performance.now() < tele.bannerT){
       g.font = `600 ${Math.round(H*0.06)}px Inter, system-ui`; g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -1135,6 +1133,14 @@ function startTele(){
   requestAnimationFrame(draw);
 }
 
+async function camLock(on){
+  try {
+    const tr = stream && stream.getVideoTracks()[0]; if (!tr || !tr.getCapabilities) return;
+    const cap = tr.getCapabilities(), m = on ? 'manual' : 'continuous', adv = {};
+    for (const k of ['exposureMode','whiteBalanceMode','focusMode']) if (cap[k] && cap[k].includes(m)) adv[k] = m;
+    if (Object.keys(adv).length) await tr.applyConstraints({ advanced:[adv] });
+  } catch(e){}
+}
 // Calibração rasante: 1) sem mãos (fundo) 2) pontas dos dedos pousadas na linha das teclas brancas 3) dedos avançados (teclas pretas).
 function startRzCal(){
   if (TELE === null){
@@ -1150,11 +1156,11 @@ function startRzCal(){
     C.timers.push(setTimeout(() => rzCalEnd(phase), t0 + 5200));
   };
   if (TELE !== null){
-    seq('bg', SOLO ? 'Passo 1/3 · Tira as mãos da mesa' : 'Telemóvel 1/2 · Tira as mãos da mesa', 0);
-    seq('white', SOLO ? 'Passo 2/3 · Pousa as PONTAS dos dedos das duas mãos na mesa, na linha onde queres tocar' : 'Telemóvel 2/2 · Pousa as PONTAS dos dedos das duas mãos nas teclas brancas do piano desenhado', 5600);
-    if (SOLO) seq('black', 'Passo 3/3 · Pousa as mãos outra vez, com os dedos uns 6 cm mais perto do telemóvel (teclas pretas)', 11200);
+    seq('bg', 'Telemóvel 1/2 · Tira as mãos da mesa', 0);
+    seq('white', 'Telemóvel 2/2 · Pousa as PONTAS dos dedos das duas mãos nas teclas brancas do piano desenhado', 5600);
     return;
   }
+  camLock(false); C.timers.push(setTimeout(() => camLock(true), 5600 + 2800));
   seq('bg', 'Passo 1/4 · Tira as mãos da frente da câmara', 0);
   seq('white', 'Passo 2/4 · Pousa as PONTAS dos dedos das duas mãos na mesa, na linha onde queres tocar', 5600);
   seq('side', 'Passo 3/4 · Tira a mão DIREITA da imagem (põe-na no colo) e deixa a ESQUERDA pousada', 11200);
@@ -1173,7 +1179,7 @@ function rzCalFrame(){
 }
 function rzCalEnd(phase){
   const C = rz.calib; if (!C) return; C.phase = null;
-  const fail = msg => { C.timers.forEach(clearTimeout); rz.calib = null; banner(msg, 4500); if (TELE === null) renderCalStatus(); };
+  const fail = msg => { C.timers.forEach(clearTimeout); rz.calib = null; banner(msg, 4500); renderCalStatus(); };
   if (C.n < 4) return fail('A câmara não deu imagens suficientes. Repete.');
   if (phase === 'bg'){
     // fundo: píxeis com cor de pele sem mãos (objetos, madeira…) — ficam excluídos. Dilata 2 px.
@@ -1192,7 +1198,7 @@ function rzCalEnd(phase){
     if (!runs.length) return fail('Não consegui medir os dedos. Repete com os dedos um pouco afastados.');
     const single = runs.filter(w => w <= 60).sort((p,q) => p-q), wr = single.length ? single[single.length>>1] : 24;
     store.rz = { a:ln.a, b:ln.b, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr:(store.rz && store.rz.thr) || 7, flip:!!(store.rz && store.rz.flip), sideOk:false, vw:rzSrc().videoWidth, vh:rzSrc().videoHeight };
-    if (TELE !== null && !SOLO){   // telemóvel: guarda a sua calibração e envia ao portátil a linha e as colunas com dedos pousados
+    if (TELE !== null){   // telemóvel: guarda a sua calibração e envia ao portátil a linha e as colunas com dedos pousados
       const c2 = store.rz, rg = []; let x = 0;
       while (x < RZW){ if (yl[x] >= 0 && c2.a*x + c2.b - yl[x] <= 3){ const x1 = x; while (x < RZW && yl[x] >= 0 && c2.a*x + c2.b - yl[x] <= 3) x++; rg.push([x1, x-1]); } else x++; }
       save(); rz.calib = null; rzReleaseAll(); tele.banner = '';
@@ -1211,9 +1217,7 @@ function rzCalEnd(phase){
   const c = store.rz; if (!c) return fail('Calibração incompleta. Repete.');
   const pens = []; for (let x = 0; x < RZW; x++) if (yl[x] >= 0){ const p = yl[x] - (c.a*x + c.b); if (p > -3 && p < 60) pens.push(p); }
   pens.sort((p,q) => p-q); c.pb = pens.length > 20 ? Math.max(0, pens[Math.floor(pens.length*0.75)]) : 0;
-  save(); rz.calib = null; rzReleaseAll();
-  if (SOLO){ banner(rzDepthOk() ? 'Calibrado. Brancas na linha, pretas com o dedo mais à frente.' : 'Calibrado. Pretas: dedo em cima da risca entre duas teclas.', 4500); return; }
-  renderCalStatus(); renderWizard();
+  save(); rz.calib = null; rzReleaseAll(); renderCalStatus(); renderWizard();
   banner(rzDepthOk() ? `Calibrado. Brancas na linha, pretas com o dedo avançado (diferença medida: ${c.pb.toFixed(1)} px).` : 'Calibrado. Deste ângulo não distingo o dedo avançado, por isso as pretas ficam ENTRE as brancas: põe o dedo em cima da risca entre duas teclas.', 5000);
   setTimeout(() => { $('askSide').style.display = 'block'; }, 4200);
 }
@@ -1532,7 +1536,6 @@ const held = new Map();
 function noteOn(midi, vel, hand, f){
   held.set(midi, (held.get(midi)||0) + 1); lastNoteOnMs = performance.now();
   if (audioReady){ try { sampler.triggerAttack(Tone.Frequency(midi,'midi').toNote(), Tone.now(), vel); } catch(e){} }
-  if (SOLO){ tele.note = noteLabel(midi) || midiName(midi); return; }
   pianoKey(midi, true, hand, f);
   $('ltNote').textContent = noteLabel(midi) || midiName(midi);
   $('ltWho').textContent = (hand === 'mouse' ? 'rato' : HAND_NAMES[hand] + (f === null ? '' : ` · dedo ${f+1} (${FINGER_NAMES[f]})`)) + ` · força ${Math.round(vel*100)}%`;
@@ -1542,7 +1545,6 @@ function noteOn(midi, vel, hand, f){
 function noteOff(midi){
   const n = (held.get(midi)||1) - 1; held.set(midi, n);
   if (n <= 0){ held.delete(midi); if (audioReady){ try { sampler.triggerRelease(Tone.Frequency(midi,'midi').toNote(), Tone.now()); } catch(e){} } }
-  if (SOLO) return;
   pianoKey(midi, false);
 }
 
@@ -1911,6 +1913,11 @@ async function startCamera(){
     if (stream) stream.getTracks().forEach(t => t.stop());
     const v = { width:{ ideal:1280 }, height:{ ideal:720 }, frameRate:{ ideal:60 } };
     if (S.deviceId) v.deviceId = { exact:S.deviceId };
+    else if (SOLO){ v.facingMode = 'user'; v.frameRate = { ideal:30 }; }
+    if (SOLO){
+      try { document.documentElement.requestFullscreen().then(() => screen.orientation.lock('landscape')).catch(() => {}); } catch(e){}
+      try { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(() => {}); } catch(e){}
+    }
     stream = await navigator.mediaDevices.getUserMedia({ video:v, audio:false });
     video.srcObject = stream; await video.play();
     vw = video.videoWidth; vh = video.videoHeight; view.width = vw; view.height = vh; updateCam();
@@ -1918,7 +1925,8 @@ async function startCamera(){
     if (!landmarker) await initLandmarker();
     $('stageMsg').style.display = 'none';
     startLoop(); renderWizard();
-    if (!piano && store.wizardDone) banner('Mesa por calibrar — clica em “Calibrar mesa”.', 5000);
+    if (SOLO){ if (!store.rz) banner('Toca em “Calibrar” para começar.', 6000); }
+    else if (!piano && store.wizardDone) banner('Mesa por calibrar — clica em “Calibrar mesa”.', 5000);
   } catch(e){
     console.error(e); stream = null; $('stageMsg').style.display = 'flex'; renderCalStatus();
     $('stageMsg').textContent = 'Não foi possível abrir a câmara (' + (e.name || e.message || e) + '). Verifica a permissão da câmara no Chrome e no sistema, e abre a página por http://localhost.';
@@ -1946,7 +1954,7 @@ function onFrame(meta){
     const capR = meta && meta.captureTime ? meta.captureTime : t0;
     lastFrameT = capR/1000; rzSize();
     // Reconhecimento dos dedos (quando a câmara os consegue ver): serve para pôr as bolas nas pontas reais e saber qual dedo tocou.
-    if (landmarker){ let ts = Math.round(t0); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; try { processResults(landmarker.detectForVideo(video, ts), lastFrameT); } catch(e){ console.warn(e); } }
+    if (landmarker && !(SOLO && (rz.fn = (rz.fn|0) + 1) % 2)){ let ts = Math.round(t0); if (ts <= lastTs) ts = lastTs + 1; lastTs = ts; try { processResults(landmarker.detectForVideo(video, ts), lastFrameT); } catch(e){ console.warn(e); } }
     try { rzFrame(lastFrameT); } catch(e){ console.warn(e); }
     drawOverlay(); updateDots();
     const t2 = performance.now(); inferEMA = inferEMA ? 0.9*inferEMA + 0.1*(t2 - t0) : t2 - t0; fpsCount++;
@@ -2140,6 +2148,7 @@ $('wzClose').onclick = closeWizard;
 // ---------- Arranque ----------
 if (TELE !== null) startTele();
 else {
+  if (SOLO){ document.body.classList.add('solo'); S.engine = 'rz'; store.wizardDone = true; $('stageMsg').textContent = 'Deita o telemóvel de lado na mesa, à frente das mãos, com o ecrã virado para ti, e toca em “Ativar câmara”.'; }
   setRange(); buildPiano(); buildSliders(); bindUI(); updateCam(); renderCalStatus(); resizeCanvases();
   requestAnimationFrame(uiLoop);
   if (S.engine === 'duo') duoStart();
