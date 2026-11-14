@@ -923,7 +923,7 @@ function rzNotes(res, t, c){
 // cada dedo que cruza a linha). O portátil reconhece os DEDOS na sua câmara (MediaPipe) e junta as duas coisas.
 // Como as mensagens são minúsculas, vão por um retransmissor público (MQTT sobre WebSocket seguro): funciona mesmo em
 // redes/firewalls que bloqueiam ligações diretas entre aparelhos. Não é enviada imagem nenhuma.
-const APP_VER = 'v17';
+const APP_VER = 'v18';
 // Miniatura da câmara do telemóvel: vai cifrada (AES-GCM) com uma chave que só existe no código QR, nunca no retransmissor.
 const b64 = u8 => { let q = ''; for (let i = 0; i < u8.length; i++) q += String.fromCharCode(u8[i]); return btoa(q); };
 const unb64 = t => { const q = atob(t), u = new Uint8Array(q.length); for (let i = 0; i < q.length; i++) u[i] = q.charCodeAt(i); return u; };
@@ -1801,7 +1801,7 @@ function drawRz(c, lw){
   for (const h of rz.hovers) if (h.midi != null && !lit.has(h.midi)) lit.set(h.midi, 'rgba(21,160,147,0.25)');
   for (const m of rz.active.keys()) lit.set(m, 'rgba(44,199,184,0.85)');
   c.textAlign = 'center'; c.textBaseline = 'middle';
-  const showKeys = S.rzShow2 !== 'balls', showLine = S.rzShow2 === 'all';
+  const showKeys = !SOLO && S.rzShow2 !== 'balls', showLine = SOLO || S.rzShow2 === 'all';   // só telemóvel: sem teclado na imagem, fica a linha de toque
   for (const black of [false, true]){
     for (const k of KEYS){
       if (!showKeys) break;
