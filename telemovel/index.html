@@ -90,13 +90,11 @@ body{background:#000}
   <div class="row" id="blk"><button class="btn" data-v="depth">Dedo à frente</button><button class="btn" data-v="lateral">Entre as brancas</button><button class="btn" data-v="off">Desligadas</button></div>
   <label>Nomes nas teclas</label>
   <div class="row" id="lab"><button class="btn" data-v="solfege">Dó Ré Mi</button><button class="btn" data-v="letters">C D E</button><button class="btn" data-v="off">Sem nomes</button></div>
-  <label>Reconhecimento das mãos (em segundo plano)</label>
+  <label>Reconhecimento das mãos (ajuda a separar dedos e palma, mas pesa: só se o telemóvel aguentar)</label>
   <div class="row" id="hnd"><button class="btn" data-v="1">Ligado</button><button class="btn" data-v="0">Desligado</button></div>
   <label>Câmara</label>
   <div class="row" id="camSz"><button class="btn" data-v="hd">Normal (16:9)</button><button class="btn" data-v="wide">Mais alta (4:3, mais lenta)</button><button class="btn" data-v="small">Pequena (rápida)</button></div>
   <div class="row" id="camList" style="margin-top:6px"></div>
-  <label>Marcas nos dedos</label>
-  <div class="row" id="skl"><button class="btn" data-v="1">Pontas e articulações</button><button class="btn" data-v="0">Só as pontas</button></div>
   <label>Volume: <b id="volV"></b></label>
   <input type="range" id="vol" min="-30" max="6" step="1">
   <label>Ferramentas</label>
@@ -111,7 +109,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-5';
+const APP_VER = 'tel-6';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -211,7 +209,7 @@ function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
 
 // ---------- definições ----------
 const KEY = 'pianoDigital.tel.v1';
-const DEF = { camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
+const DEF = { handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:false, debug:false, volume:-4, lineOff:0 };
 let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
 const S = Object.assign({}, DEF, store.S || {});
 const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
@@ -332,7 +330,7 @@ function toKey(x, pen){
 }
 function toNotes(res, t, c){
   // mãos reconhecidas (em segundo plano): dedo de cada toque e palma/pulso fora
-  const H = hands.res && t - hands.res.t < 0.35 ? hands.res : null, tips = [], spans = [];
+  const H = hands.res && t - hands.res.t < 0.7 ? hands.res : null, tips = [], spans = [];
   rz.tipTouch = null;
   if (H) H.hands.forEach((pts, hi) => {
     let x1 = 1e9, x2 = -1e9; for (const q of pts){ x1 = Math.min(x1, q[0]); x2 = Math.max(x2, q[0]); }
@@ -436,7 +434,7 @@ function handsStart(){
 }
 function handsStop(){ if (hands.w){ hands.w.terminate(); hands.w = null; } hands.ready = false; hands.busy = false; hands.res = null; }
 function handsFeed(t){
-  if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < Math.max(0.07, 1.4*hands.ms/1000)) return;
+  if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < Math.max(0.3, 2*hands.ms/1000)) return;
   hands.busy = true; hands.lastSend = t;
   createImageBitmap(vid, { resizeWidth:640, resizeHeight:Math.round(640*vid.videoHeight/vid.videoWidth), resizeQuality:'low' }).then(bmp => { if (!hands.w){ bmp.close(); return; } hands.w.postMessage({ bmp, ts:Math.round(t*1000), t }, [bmp]); })
     .catch(() => { hands.busy = false; });
@@ -742,7 +740,7 @@ function draw(){
     g.textAlign = 'center'; g.fillText('esq. ' + (S.offL > 0 ? '+' : '') + S.offL, lx, PY - 4); g.fillText('dir. ' + (S.offR > 0 ? '+' : '') + S.offR, rx, PY - 4); }
   // pontas dos dedos: anel verde-água; cheio quando está a tocar
   g.lineWidth = 2.5; g.strokeStyle = AQ; g.fillStyle = AQ;
-  const HR = hands.res && performance.now()/1000 - hands.res.t < 0.4 && S.skel ? hands.res : null;
+  const HR = hands.res && performance.now()/1000 - hands.res.t < 0.7 ? hands.res : null;
   if (HR){
     // mão completa (do reconhecimento das mãos): ligações, articulações e pontas; ponta cheia = dedo a tocar
     if (!hands.disp || hands.disp.length !== HR.hands.length) hands.disp = HR.hands.map(h => h.map(q => q.slice()));
@@ -750,7 +748,6 @@ function draw(){
     const tt = rz.tipTouch || new Set();
     hands.disp.forEach((pts, hi) => {
       const sp = pts.map(q => toScr(q[0], q[1]));
-      g.fillStyle = '#eafaf7'; for (let k = 0; k < 21; k++) if (![4,8,12,16,20].includes(k)){ g.beginPath(); g.arc(sp[k][0], sp[k][1], 3.5, 0, Math.PI*2); g.fill(); }
       g.lineWidth = 2.5; g.strokeStyle = AQ; g.fillStyle = AQ;
       [4,8,12,16,20].forEach((k, f) => { g.beginPath(); g.arc(sp[k][0], sp[k][1], 8, 0, Math.PI*2); if (tt.has(hi + ':' + f)) g.fill(); g.stroke(); });
     });
@@ -773,6 +770,7 @@ function onFrame(){
   if (vid.readyState >= 2 && vid.videoWidth){
     if (!rz.H || rz.cv.dataset.vw !== String(vid.videoWidth)){ rzSize(); rz.cv.dataset.vw = String(vid.videoWidth); }
     const a = performance.now();
+    if (GR.mode && t - (GR.evalT || 0) > 15){ GR.evalT = t; grabReset(); }
     try { processFrame(t); } catch(e){ console.warn(e); }
     perf.ms = 0.9*perf.ms + 0.1*(performance.now() - a);
     handsFeed(t);
@@ -797,6 +795,7 @@ function statUpdate(){
 // Pede-se a imagem do sensor inteiro (4:3, como o sensor) e reduz-se só para a análise. Zoom no mínimo, se der.
 const CAMS = { wide:{ width:1280, height:960 }, hd:{ width:1280, height:720 }, small:{ width:640, height:360 } };
 if (S.camV !== 2){ S.camV = 2; if (S.cam === 'wide') S.cam = 'hd'; }
+if (S.handsV !== 2){ S.handsV = 2; S.hands = false; }
 async function openCam(){
   const sz = CAMS[S.cam] || CAMS.wide, dev = S.camId ? { deviceId:{ exact:S.camId } } : { facingMode:'user' };
   const tries = [
@@ -849,11 +848,11 @@ $('bFlip').onclick = () => { if (cal()){ cal().flip = !cal().flip; save(); relea
 $('line').oninput = e => { S.lineOff = +e.target.value; $('lineV').textContent = S.lineOff; releaseAll(); save(); layout(); };
 $('bSet').onclick = () => { const p = $('pop'); p.style.display = p.style.display === 'block' ? 'none' : 'block'; $('songs').style.display = 'none'; renderPop(); renderCams(); };
 function seg(id, key, conv){ for (const b of $(id).querySelectorAll('button')){ b.onclick = () => { S[key] = conv(b.dataset.v); save(); renderPop(); releaseAll(); if (key === 'hands'){ S.hands ? handsStart() : handsStop(); } }; } }
-seg('blk', 'blackMode', v => v); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1'); seg('skl', 'skel', v => v === '1');
+seg('blk', 'blackMode', v => v); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1');
 function renderPop(){
   $('tau').value = S.tauMm; $('tauV').textContent = S.tauMm + ' mm'; $('ks').value = S.keyScale; $('ksV').textContent = S.keyScale.toFixed(2) + '×';
   $('vol').value = S.volume; $('volV').textContent = S.volume + ' dB';
-  for (const [id, key, f] of [['skl','skel',v => v === '1'], ['camSz','cam',v => v], ['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
+  for (const [id, key, f] of [['camSz','cam',v => v], ['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
   $('bDbg').classList.toggle('on', S.debug);
 }
 for (const b of $('camSz').querySelectorAll('button')) b.onclick = async () => { S.cam = b.dataset.v; save(); renderPop(); await switchCam(); };
