@@ -88,6 +88,8 @@ body{background:#000}
   <input type="range" id="ks" min="0.9" max="2.4" step="0.05">
   <label>Teclas pretas</label>
   <div class="row" id="blk"><button class="btn" data-v="depth">Dedo à frente</button><button class="btn" data-v="lateral">Entre as brancas</button><button class="btn" data-v="off">Desligadas</button></div>
+  <label>Teclas pretas: avançar pelo menos <b id="bfV"></b> (dedo mais perto do telemóvel)</label>
+  <input type="range" id="bf" min="6" max="35" step="1">
   <label>Nomes nas teclas</label>
   <div class="row" id="lab"><button class="btn" data-v="solfege">Dó Ré Mi</button><button class="btn" data-v="letters">C D E</button><button class="btn" data-v="off">Sem nomes</button></div>
   <label>Reconhecimento das mãos (ajuda a separar dedos e palma, mas pesa: só se o telemóvel aguentar)</label>
@@ -109,7 +111,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-8';
+const APP_VER = 'tel-9';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -209,7 +211,7 @@ function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
 
 // ---------- definições ----------
 const KEY = 'pianoDigital.tel.v1';
-const DEF = { detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:false, debug:false, volume:-4, lineOff:0 };
+const DEF = { blackFwd:15, detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:false, debug:false, volume:-4, lineOff:0 };
 let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
 const S = Object.assign({}, DEF, store.S || {});
 const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
@@ -220,7 +222,7 @@ if (!S.center) S.center = WHITES.indexOf(72);
 const SOLF = ['Dó','Dó♯','Ré','Ré♯','Mi','Fá','Fá♯','Sol','Sol♯','Lá','Lá♯','Si'], LET = ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
 const noteName = m => (S.labels === 'letters' ? LET : SOLF)[m % 12] + (Math.floor(m/12) - 1);
 const hasBlackAfter = m => [0,2,5,7,9].includes(m % 12);
-const KW = 23.5, FOV = 72;
+const KW = 23.5, FOV = 72, BLACK_W = 13.7;
 const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
 
 // ---------- câmara e processamento ----------
@@ -394,7 +396,8 @@ function processFrame(t, R, CY){
 function toKey(x, pen){
   const c = cal(), keyPx = S.keyScale*c.wr, depthOk = (c.pb || 0) >= 1.2, mode = S.blackMode === 'depth' && !depthOk ? 'lateral' : S.blackMode;
   const dfrac = depthOk ? clamp(pen/c.pb, -0.5, 2) : 0, zref = (RZW/2)/Math.tan(FOV*Math.PI/360)*16/c.wr;
-  const xc = RZW/2 + (x - RZW/2)*(1 - 55*dfrac/zref);
+  // dedo mais à frente = mais perto da câmara = aparece mais afastado do centro da imagem: corrige para a distância da calibração
+  const xc = RZW/2 + (x - RZW/2)*(1 - clamp(dfrac*(c.pbMm || 60), -30, 60)/zref);
   const w = S.center + (c.flip ? -1 : 1)*(c.x0 - xc)/keyPx;       // posição em teclas brancas
   const i = Math.floor(w), fr = w - i, white = WHITES[clamp(i, 0, WHITES.length - 1)];
   const blackAt = j => (j >= 0 && j < WHITES.length - 1 && hasBlackAfter(WHITES[j])) ? WHITES[j] + 1 : null;
@@ -402,9 +405,14 @@ function toKey(x, pen){
     const bh = S.blackHalf/KW;
     if (fr < bh && blackAt(i - 1) != null) return { midi:blackAt(i - 1), black:true, w };
     if (fr > 1 - bh && blackAt(i) != null) return { midi:blackAt(i), black:true, w };
-  } else if (mode === 'depth' && dfrac >= 0.5){
-    const first = fr < 0.5 ? [i - 1, i] : [i, i - 1];
-    for (const j of first){ const b = blackAt(j); if (b != null) return { midi:b, black:true, w }; }
+  } else if (mode === 'depth'){
+    // Como num piano: as pretas ficam MAIS PARA DENTRO (mais perto do telemóvel) e só por cima da fronteira entre duas brancas.
+    // Avanço medido em mm (a calibração mede quantos px corresponde o gesto de ir às pretas); a meio de um Ré avançado continua a ser Ré.
+    const fwd = dfrac*(c.pbMm || 60), half = (BLACK_W/2 + 1.8)/KW;
+    if (fwd >= S.blackFwd){
+      if (fr < half && blackAt(i - 1) != null) return { midi:blackAt(i - 1), black:true, w };
+      if (fr > 1 - half && blackAt(i) != null) return { midi:blackAt(i), black:true, w };
+    }
   }
   return { midi:white, black:false, w };
 }
@@ -448,15 +456,18 @@ function toNotes(res, t, c){
   }
   const now = new Map();
   for (const tc of res.touches){
-    const pv = rz.prev.find(p => Math.abs(p.x - tc.x) < 0.5*c.wr && p.midi != null);
-    const k = toKey(tc.xs, tc.pens); let base = k.midi;
-    if (pv && base !== pv.base && pv.black === k.black && Math.abs(k.w - pv.w) < 0.25) base = pv.base;   // perto da fronteira: fica a tecla anterior
+    const pv = rz.prev.find(p => Math.abs(p.x - tc.x) < 0.5*c.wr);
+    const k = toKey(tc.xs, tc.pens);
+    tc.age = pv ? (pv.age || 1) + 1 : 1; tc.w = k.w;
     // mão: lado da divisão (a meio das mãos na calibração); um dedo que já estava pousado fica com a mão que tinha
     const hand = pv && pv.hand ? pv.hand : (k.w < S.center ? 'L' : 'R');
+    let base = k.midi, black = k.black;
+    if (pv && pv.locked && Math.abs(k.w - pv.lw) < 0.6){ base = pv.base; black = pv.black; tc.locked = true; tc.lw = pv.lw; }     // tecla fixa enquanto o dedo fica no sítio
+    else if (tc.age >= 2 || tc.land){ tc.locked = true; tc.lw = k.w; }                                                              // decide à 2.ª imagem (profundidade já estável)
     // nota que soa = tecla da mesa + oitava dessa mão; um dedo que continua pousado mantém a nota (mesmo que a oitava mude)
-    const midi = pv && pv.base === base && pv.hand === hand ? pv.midi : base + 12*offOf(hand);
-    tc.base = base; tc.hand = hand; tc.midi = midi; tc.w = k.w; tc.black = k.black;
-    if (tc.snd && midi != null && !now.has(midi)) now.set(midi, tc);
+    const midi = pv && pv.base === base && pv.hand === hand && pv.midi != null ? pv.midi : base + 12*offOf(hand);
+    tc.base = base; tc.hand = hand; tc.midi = tc.locked ? midi : null; tc.black = black;
+    if (tc.snd && tc.locked && midi != null && !now.has(midi)) now.set(midi, tc);
   }
   for (const [midi, tc] of now){
     if (rz.active.has(midi)) continue;
@@ -553,7 +564,7 @@ function startCal(){
   seq('bg', 'Passo 1/4 · Tira as mãos da frente da câmara', 0);
   seq('white', 'Passo 2/4 · Pousa as PONTAS dos dedos das duas mãos na mesa, onde queres tocar', 5600);
   seq('side', 'Passo 3/4 · Tira a mão DIREITA (põe-na no colo) e deixa a ESQUERDA pousada', 11200);
-  seq('black', 'Passo 4/4 · Pousa as duas mãos outra vez, com os dedos uns 6 cm mais perto do telemóvel', 16800);
+  seq('black', 'Passo 4/4 · Pousa as pontas como se fosses tocar nas teclas PRETAS: uns 3 cm mais perto do telemóvel', 16800);
 }
 function calFrame(CY){
   const C = rz.calib; if (!C.phase || !CY) return;
@@ -608,7 +619,7 @@ function calEnd(phase){
   }
   const c = cal(); if (!c) return fail('Calibração incompleta. Repete.');
   const pens = []; for (let x = 0; x < RZW; x++) if (yl[x] >= 0){ const p = yl[x] - ly(x); if (p > -3 && p < 60) pens.push(p); }
-  pens.sort((p,q) => p-q); c.pb = pens.length > 20 ? Math.max(0, pens[Math.floor(pens.length*0.75)]) : 0;
+  pens.sort((p,q) => p-q); c.pb = pens.length > 20 ? Math.max(0, pens[Math.floor(pens.length*0.6)]) : 0; c.pbMm = 30;
   save(); rz.calib = null; releaseAll(); showUI(); layout(); planOct();
   banner(c.pb >= 1.2 ? 'Calibrado. Brancas na linha; pretas com o dedo mais à frente.' : 'Calibrado. Pretas: põe o dedo em cima da risca entre duas brancas.', 4500);
 }
@@ -789,7 +800,7 @@ function draw(){
   g.strokeStyle = 'rgba(44,199,184,0.7)'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(p0[0], p0[1]); g.lineTo(p1[0], p1[1]); g.stroke();
   // piano em baixo, alinhado com a imagem: cada tecla fica por baixo do sítio onde se toca
   const PH = L.PH, PY = SH - PH, depthOk = (c.pb || 0) >= 1.2, mode = S.blackMode === 'depth' && !depthOk ? 'lateral' : S.blackMode;
-  const act = new Set(rz.touches.filter(q => q.snd).map(q => q.base)), hov = new Set(); for (const h of rz.hovers){ const k = toKey(h.x, 0); hov.add(k.midi); }
+  const act = new Set(rz.touches.filter(q => q.snd && q.locked).map(q => q.base)), hov = new Set(); for (const h of rz.hovers){ const k = toKey(h.x, 0); hov.add(k.midi); }
   const zoneOfW = i => i < S.center ? 'L' : 'R';
   const want = practiceKeys();          // tecla física → intensidade (notas da música a tocar)
   const keys = [];
@@ -932,6 +943,7 @@ $('bSet').onclick = () => { const p = $('pop'); p.style.display = p.style.displa
 function seg(id, key, conv){ for (const b of $(id).querySelectorAll('button')){ b.onclick = () => { S[key] = conv(b.dataset.v); save(); renderPop(); releaseAll(); if (key === 'hands'){ S.hands ? handsStart() : handsStop(); } }; } }
 seg('blk', 'blackMode', v => v); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1');
 function renderPop(){
+  $('bf').value = S.blackFwd; $('bfV').textContent = S.blackFwd + ' mm';
   $('tau').value = S.tauMm; $('tauV').textContent = S.tauMm + ' mm'; $('ks').value = S.keyScale; $('ksV').textContent = S.keyScale.toFixed(2) + '×';
   $('vol').value = S.volume; $('volV').textContent = S.volume + ' dB';
   for (const [id, key, f] of [['camSz','cam',v => v], ['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
@@ -951,6 +963,7 @@ async function renderCams(){
     });
   } catch(e){}
 }
+$('bf').oninput = e => { S.blackFwd = +e.target.value; save(); renderPop(); };
 $('tau').oninput = e => { S.tauMm = +e.target.value; save(); renderPop(); };
 $('ks').oninput = e => { S.keyScale = +e.target.value; save(); renderPop(); releaseAll(); planOct(); };
 $('vol').oninput = e => { S.volume = +e.target.value; if (sampler) sampler.volume.value = S.volume; save(); renderPop(); };
