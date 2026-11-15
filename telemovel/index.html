@@ -109,7 +109,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-7';
+const APP_VER = 'tel-8';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -209,7 +209,7 @@ function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
 
 // ---------- definições ----------
 const KEY = 'pianoDigital.tel.v1';
-const DEF = { handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:false, debug:false, volume:-4, lineOff:0 };
+const DEF = { detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:false, debug:false, volume:-4, lineOff:0 };
 let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
 const S = Object.assign({}, DEF, store.S || {});
 const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
@@ -352,11 +352,40 @@ function processFrame(t, R, CY){
   const used = new Set();
   for (const hv of res.hovers){
     let bt = null, bd = 0.6*c.wr; for (const tr of rz.tracks){ const d = Math.abs(tr.x - hv.x); if (d < bd && !used.has(tr)){ bd = d; bt = tr; } }
-    if (bt){ used.add(bt); bt.x = follow(bt.x, hv.x, 0.4*c.wr); bt.gap = follow(bt.gap, hv.gap, 5); bt.age++; bt.miss = 0; }
-    else { const tr = { x:hv.x, gap:hv.gap, age:1, miss:0 }; rz.tracks.push(tr); used.add(tr); }
+    if (bt){ used.add(bt); bt.x = follow(bt.x, hv.x, 0.4*c.wr); bt.gap = follow(bt.gap, hv.gap, 5); bt.age++; bt.miss = 0; bt.h.push([t, hv.gap]); }
+    else { const tr = { x:hv.x, gap:hv.gap, age:1, miss:0, h:[[t, hv.gap]], land:null }; rz.tracks.push(tr); used.add(tr); }
   }
-  rz.tracks = rz.tracks.filter(tr => used.has(tr) || ++tr.miss <= 2);
-  res.hovers = rz.tracks.filter(tr => tr.age >= 3);
+  // dedos no ar: aguentam até 4 imagens sem serem vistos (antes 2) e aparecem logo à 2.ª imagem (antes 3)
+  rz.tracks = rz.tracks.filter(tr => used.has(tr) || ++tr.miss <= 4);
+  for (const tr of rz.tracks) while (tr.h.length && t - tr.h[0][0] > 0.3) tr.h.shift();
+  // Toque pela BATIDA: um dedo que desce depressa e PÁRA perto da mesa está a tocar, mesmo que fique um pouco acima da linha
+  // (quem toca mais para trás aparece mais acima na imagem do que a linha medida na calibração). Vê-se coluna a coluna.
+  { const landMax = Math.max(2.2*tauOn, 5*pxmm), drop = 4*pxmm, rel = 2.5*pxmm, still = Math.max(1, 0.6*pxmm);
+    if (!rz.landF || rz.landF.length !== RZW) rz.landF = new Float32Array(RZW).fill(999);
+    const LF = rz.landF, H2 = rz.hist, prev = H2.length >= 2 ? H2[H2.length - 2].gap : null;
+    for (let x = 0; x < RZW; x++){
+      const g = gap[x];
+      if (LF[x] < 900){ if (g > LF[x] + rel || g > landMax + rel) LF[x] = 999; continue; }
+      if (!prev || g > landMax || g <= tauOn || Math.abs(g - prev[x]) > still) continue;
+      let top = g; for (const fr of H2){ if (t - fr.t <= 0.25) top = Math.max(top, Math.min(fr.gap[x], 60)); }
+      if (top - g >= drop) LF[x] = g;
+    }
+    // colunas pousadas → toques (como os normais: um dedo ≈ uma largura de dedo)
+    let x = 0;
+    while (x < RZW){
+      if (LF[x] >= 900){ x++; continue; }
+      const x1 = x; while (x < RZW && LF[x] < 900) x++;
+      const w = x - x1; if (w < 0.35*c.wr || w > 5.5*c.wr) continue;
+      const n = Math.max(1, Math.min(4, Math.floor(w/(1.25*c.wr))));
+      for (let k = 0; k < n; k++){
+        const cx = x1 + w*(k + 0.5)/n; if (res.touches.some(tc => Math.abs(tc.x - cx) < 0.6*c.wr)) continue;
+        let g = 999; for (let q = Math.floor(x1 + w*k/n); q < x1 + w*(k + 1)/n; q++) g = Math.min(g, gap[q]);
+        const pv = rz.prev.find(q => q.land && Math.abs(q.x - cx) < 0.6*c.wr);
+        res.touches.push({ x:cx, w:w/n, pen:-g, xs:pv ? follow(pv.xs, cx, 0.35*c.wr) : cx, pens:-g, snd:true, vel:pv ? pv.vel : 0.6, land:true });
+      }
+    }
+  }
+  res.hovers = rz.tracks.filter(tr => tr.age >= 2 && !(rz.landF && rz.landF[Math.round(clamp(tr.x, 0, RZW - 1))] < 900));
   rz.yl = yl; rz.yTop = yTop; rz.gap = gap;
   toNotes(res, t, c);
 }
@@ -438,7 +467,7 @@ function toNotes(res, t, c){
     if (now.has(midi)){ rz.missT.delete(midi); continue; }
     const t0 = rz.missT.get(midi);
     if (t0 == null){ rz.missT.set(midi, t); continue; }
-    if (t - t0 >= 0.045){ rz.missT.delete(midi); rz.active.delete(midi); rz.offT.set(midi, t); noteOff(midi); }
+    if (t - t0 >= 0.07){ rz.missT.delete(midi); rz.active.delete(midi); rz.offT.set(midi, t); noteOff(midi); }
   }
   rz.prev = res.touches; rz.touches = res.touches; rz.hovers = res.hovers;
 }
@@ -565,7 +594,7 @@ function calEnd(phase){
         for (let y = L + 4; y < Math.min(rz.H, L + 20); y++) tb.push(cc(y*RZW + x));
       }
       const pct = (a, q) => { a.sort((p, r) => p - r); return a[Math.floor(q*(a.length - 1))]; };
-      if (sk.length > 200 && tb.length > 200){ const s15 = pct(sk, 0.15), t97 = pct(tb, 0.97); if (s15 - t97 > 3) thr = clamp((s15 + t97)/2, 4, 18); }
+      if (sk.length > 200 && tb.length > 200){ const s15 = pct(sk, 0.15), t97 = pct(tb, 0.97); if (s15 - t97 > 3) thr = clamp(t97 + 0.4*(s15 - t97), 4, 16); }
     }
     store.cal = { a:ln.a, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr, flip:!!(old && old.flip), vw:vid.videoWidth, vh:vid.videoHeight, camKey:camKey(), rd:RD.mode || '' };
     S.lineOff = 0; $('line').value = 0;
@@ -848,6 +877,7 @@ function statUpdate(){
 const CAMS = { wide:{ width:1280, height:960 }, hd:{ width:1280, height:720 }, small:{ width:640, height:360 } };
 if (S.camV !== 2){ S.camV = 2; if (S.cam === 'wide') S.cam = 'hd'; }
 if (S.handsV !== 2){ S.handsV = 2; S.hands = false; }
+if (S.detV !== 1){ S.detV = 1; if (S.tauMm <= 2) S.tauMm = 2.5; }
 async function openCam(){
   const sz = CAMS[S.cam] || CAMS.wide, dev = S.camId ? { deviceId:{ exact:S.camId } } : { facingMode:'user' };
   const tries = [
