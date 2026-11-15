@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#020b0a">
+<title>Piano Digital · Telemóvel</title>
+<script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
+<style>
+:root{--aq:#15a093;--aq-hi:#2cc7b8;--bg:#020b0a;--tx:#d8efec;--mu:#86aaa5}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font-family:Inter,system-ui,sans-serif;overflow:hidden;touch-action:manipulation}
+#vid{position:fixed;left:0;top:0;width:100%;height:100%;object-fit:fill;transform:scaleX(-1);background:#000}
+body{background:#000}
+#ov{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
+#bar{position:fixed;top:0;left:0;right:0;height:42px;display:flex;align-items:center;gap:6px;padding:0 8px;background:rgba(2,11,10,.55);z-index:5}
+#bar .sp{flex:1}
+.btn{border:1px solid rgba(44,199,184,.55);background:rgba(2,11,10,.6);color:var(--tx);border-radius:9px;padding:6px 11px;font-size:13px;min-height:32px;font-family:inherit}
+.btn.pri{background:var(--aq);border-color:var(--aq-hi);color:#021110;font-weight:600}
+#stat{font-size:11px;color:var(--mu);font-variant-numeric:tabular-nums;white-space:nowrap}
+#note{position:fixed;left:10px;top:50px;font-size:26px;font-weight:700;color:#eafaf7;text-shadow:0 0 12px var(--aq);z-index:4;pointer-events:none}
+#msg{position:fixed;left:50%;top:38%;transform:translate(-50%,-50%);max-width:86%;background:rgba(2,11,10,.82);border:1px solid var(--aq);border-radius:12px;padding:12px 16px;font-size:16px;text-align:center;z-index:6;display:none}
+#start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;z-index:9;background:var(--bg)}
+#start h1{margin:0;font-size:24px;color:#eafaf7}
+#start p{margin:0;max-width:520px;color:var(--mu);line-height:1.5;font-size:15px}
+#start .btn{font-size:17px;padding:12px 22px}
+#slide{position:fixed;right:6px;top:50%;transform:translateY(-50%);z-index:5;display:none;flex-direction:column;align-items:center;gap:4px;background:rgba(2,11,10,.5);border-radius:10px;padding:6px 4px}
+#slide input{writing-mode:vertical-lr;direction:rtl;width:28px;height:120px;accent-color:var(--aq-hi)}
+#slide span{font-size:10px;color:var(--mu)}
+#pop{position:fixed;top:46px;right:8px;width:min(340px,80vw);max-height:calc(100% - 54px);overflow:auto;background:rgba(2,11,10,.94);border:1px solid var(--aq);border-radius:12px;padding:12px;z-index:7;display:none;font-size:14px}
+#pop label{display:block;margin:10px 0 4px;color:var(--mu);font-size:12px}
+#pop input[type=range]{width:100%;accent-color:var(--aq-hi)}
+#pop .row{display:flex;gap:6px;flex-wrap:wrap}
+#pop .row .btn.on{background:var(--aq);color:#021110}
+</style>
+</head>
+<body>
+<video id="vid" playsinline muted autoplay></video>
+<canvas id="ov"></canvas>
+<div id="bar">
+  <button class="btn pri" id="bCal">Calibrar</button>
+  <button class="btn" id="bDn">Oitava −</button>
+  <button class="btn" id="bUp">Oitava +</button>
+  <button class="btn" id="bFlip">⇄</button>
+  <span class="sp"></span>
+  <span id="stat"></span>
+  <button class="btn" id="bSet">⚙</button>
+</div>
+<div id="note"></div>
+<div id="msg"></div>
+<div id="slide"><span>linha</span><input type="range" id="line" min="-30" max="30" step="0.5" value="0"><span id="lineV">0</span></div>
+<div id="pop">
+  <label>Sensibilidade do toque (distância dedo–mesa): <b id="tauV"></b></label>
+  <input type="range" id="tau" min="0.5" max="6" step="0.25">
+  <label>Tamanho das teclas: <b id="ksV"></b></label>
+  <input type="range" id="ks" min="0.9" max="2.4" step="0.05">
+  <label>Teclas pretas</label>
+  <div class="row" id="blk"><button class="btn" data-v="depth">Dedo à frente</button><button class="btn" data-v="lateral">Entre as brancas</button><button class="btn" data-v="off">Desligadas</button></div>
+  <label>Nomes nas teclas</label>
+  <div class="row" id="lab"><button class="btn" data-v="solfege">Dó Ré Mi</button><button class="btn" data-v="letters">C D E</button><button class="btn" data-v="off">Sem nomes</button></div>
+  <label>Reconhecimento das mãos (em segundo plano)</label>
+  <div class="row" id="hnd"><button class="btn" data-v="1">Ligado</button><button class="btn" data-v="0">Desligado</button></div>
+  <label>Volume: <b id="volV"></b></label>
+  <input type="range" id="vol" min="-30" max="6" step="1">
+  <label>Ferramentas</label>
+  <div class="row"><button class="btn" id="bDbg">Ver diagnóstico</button><button class="btn" id="bDiag">Gravar diagnóstico (PNG)</button></div>
+  <p style="color:var(--mu);font-size:12px;margin:12px 0 0" id="ver"></p>
+</div>
+<div id="start">
+  <h1>Piano Digital · Telemóvel</h1>
+  <p>Põe o telemóvel <b>de pé, deitado de lado</b> (ao alto, na horizontal), em cima da mesa e à frente das mãos, com o ecrã virado para ti. A câmara da frente tem de ficar à altura da mesa, a olhar para os teus dedos.</p>
+  <button class="btn pri" id="bGo">Começar</button>
+  <p id="startErr" style="color:#ff9a8b"></p>
+</div>
+<script>
+'use strict';
+const APP_VER = 'tel-1';
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
+
+/*RZ-BEGIN*/
+// ---------- 3b. Motor "câmara rasante" (funções puras) ----------
+// Com a câmara ao nível da mesa, a altura de um dedo vê-se diretamente: é o espaço entre a parte de baixo da pele
+// e a linha onde os dedos tocam a mesa. Um dedo toca quando esse espaço fecha (como uma "cortina de luz" rente à mesa).
+// Pele: crominância avermelhada (Cr − Cb), que distingue a pele da mesa, da roupa e da parede mesmo com pouca luz.
+function rzSkin(rgba, n, thr, bg, out){
+  for (let i = 0, j = 0; i < n; i++, j += 4){
+    const R = rgba[j], G = rgba[j+1], B = rgba[j+2];
+    out[i] = (0.6687*R - 0.0874*G - 0.5813*B > thr && 0.299*R + 0.587*G + 0.114*B > 18 && !(bg && bg[i])) ? 1 : 0;
+  }
+  return out;
+}
+// Para cada coluna: a linha (y) do píxel de pele mais baixo, exigindo 3 píxeis de pele seguidos na vertical. −1 = sem pele.
+function rzLowest(m, W, H){
+  const yl = new Float32Array(W);
+  for (let x = 0; x < W; x++){
+    yl[x] = -1;
+    for (let y = H-1; y >= 2; y--) if (m[y*W+x] && m[(y-1)*W+x] && m[(y-2)*W+x]){ yl[x] = y; break; }
+  }
+  return yl;
+}
+// Igual, mas a procurar da linha da mesa para cima (lineAt(x) = linha nessa coluna). O que está abaixo da linha só conta se estiver
+// ligado ao dedo: numa mesa brilhante o REFLEXO do dedo aparece abaixo da linha e não pode ser confundido com um dedo pousado.
+function rzLowestAt(m, W, H, lineAt, tol){
+  const yl = new Float32Array(W);
+  for (let x = 0; x < W; x++){
+    yl[x] = -1; const L = lineAt(x);
+    for (let y = Math.min(H-1, Math.round(L) + tol); y >= 2; y--) if (m[y*W+x] && m[(y-1)*W+x] && m[(y-2)*W+x]){ yl[x] = y; break; }
+    if (yl[x] >= L - 1){ let q = yl[x]; while (q + 1 < H && m[(q+1)*W+x]) q++; yl[x] = q; }
+  }
+  return yl;
+}
+function rzMedian5(a){
+  const o = new Float32Array(a.length), w = [0,0,0,0,0];
+  for (let i = 0; i < a.length; i++){ for (let k = 0; k < 5; k++) w[k] = a[Math.max(0, Math.min(a.length-1, i+k-2))]; w.sort((p,q) => p-q); o[i] = w[2]; }
+  return o;
+}
+// Reta y = a·x + b ajustada, de forma robusta, à parte de baixo dos dedos pousados.
+function rzFitLine(yl){
+  let xs = []; for (let x = 0; x < yl.length; x++) if (yl[x] >= 0) xs.push(x);
+  if (xs.length < 20) return null;
+  const sorted = xs.map(x => yl[x]).sort((p,q) => p-q), cut = sorted[Math.floor(sorted.length*0.3)];
+  xs = xs.filter(x => yl[x] >= cut);
+  let a = 0, b = 0;
+  for (let it = 0; it < 5; it++){
+    let sx = 0, sy = 0, sxx = 0, sxy = 0; const n = xs.length; if (n < 10) return null;
+    for (const x of xs){ sx += x; sy += yl[x]; sxx += x*x; sxy += x*yl[x]; }
+    a = (n*sxy - sx*sy)/(n*sxx - sx*sx || 1); b = (sy - a*sx)/n;
+    const res = xs.map(x => yl[x] - (a*x + b)), sd = Math.sqrt(mean(res.map(r => r*r)));
+    xs = xs.filter((x,i) => Math.abs(res[i]) < Math.max(2, 2*sd));
+  }
+  return { a, b };
+}
+// gap[x] = espaço (px) entre a mesa e a pele em cada coluna (999 = sem pele; negativo = abaixo da linha, i.e. mais perto da câmara).
+// Devolve os dedos pousados (touches) e as pontas no ar (hovers). prev = toques do fotograma anterior (histerese).
+function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
+  const tauAt = x => { for (const p of prev) if (Math.abs(p.x - x) < 0.6*wr) return tauOff; return tauOn; };
+  const touches = [], hovers = []; let x = 0;
+  while (x < W){
+    if (gap[x] <= tauAt(x)){
+      const x1 = x; while (x < W && gap[x] <= tauAt(x)) x++;
+      const w = x - x1;
+      if (w >= 0.35*wr && w <= 5.5*wr){
+        // pontas = máximos locais da profundidade abaixo da linha, afastados pelo menos 0,6 dedos e com relevo
+        const pk = [], sep = Math.max(3, Math.round(0.6*wr)), prom = Math.max(1.5, 0.15*wr);
+        for (let c = x1; c < x1 + w; c++){
+          const v = -gap[c]; let top = true, lmin = v, rmin = v;
+          for (let k = 1; k <= sep && top; k++){ const a = c-k >= x1 ? -gap[c-k] : -1e9, b = c+k < x1+w ? -gap[c+k] : -1e9; if (a > v || b >= v) top = false; if (a > -1e8) lmin = Math.min(lmin, a); if (b > -1e8) rmin = Math.min(rmin, b); }
+          if (top && (v - lmin >= prom || c - x1 < sep) && (v - rmin >= prom || x1 + w - 1 - c < sep)) pk.push({ x:c, pen:v });
+        }
+        if (pk.length >= 2 && pk.length <= 5){ for (const q of pk) touches.push({ x:q.x, w:Math.min(wr, w/pk.length), pen:q.pen }); continue; }
+        // sem vales claros entre dedos: um dedo pousado aparece com ~1,5 a 2 larguras de dedo (em perspetiva) → é UMA nota
+        const n = Math.max(1, Math.min(3, Math.floor(w/(1.25*wr))));
+        for (let k = 0; k < n; k++){
+          const c0 = Math.floor(x1 + w*k/n), c1 = Math.max(c0+1, Math.floor(x1 + w*(k+1)/n)), v = [];
+          for (let c = c0; c < c1; c++) v.push(-gap[c]); v.sort((p,q) => p-q);
+          touches.push({ x:(c0+c1)/2, w:w/n, pen:v[v.length>>1] });
+        }
+      }
+    } else x++;
+  }
+  // Pontas no ar: mínimos locais do espaço dedo–mesa (o ponto mais baixo de cada saliência da mão).
+  const r = Math.max(3, Math.round(0.4*wr));
+  for (x = r; x < W-r; x++){
+    const g = gap[x]; if (g > 90 || g <= tauOn) continue;
+    let ok = true; for (let k = 1; k <= r; k++) if (gap[x-k] < g || gap[x+k] <= g){ ok = false; break; }
+    if (ok && Math.min(gap[x-r], gap[x+r]) - g >= 2.5) hovers.push({ x, gap:g });
+  }
+  return { touches, hovers };
+}
+/*RZ-END*/
+
+
+// ---------- definições ----------
+const KEY = 'pianoDigital.tel.v1';
+const DEF = { tauMm:2, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
+let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
+const S = Object.assign({}, DEF, store.S || {});
+const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
+
+// teclas brancas de Lá0 a Dó8; S.center = índice (fracionário) da tecla branca que fica a meio da imagem
+const WHITES = []; for (let m = 21; m <= 108; m++) if (![1,3,6,8,10].includes(m % 12)) WHITES.push(m);
+if (!S.center) S.center = WHITES.indexOf(72);
+const SOLF = ['Dó','Dó♯','Ré','Ré♯','Mi','Fá','Fá♯','Sol','Sol♯','Lá','Lá♯','Si'], LET = ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
+const noteName = m => (S.labels === 'letters' ? LET : SOLF)[m % 12] + (Math.floor(m/12) - 1);
+const hasBlackAfter = m => [0,2,5,7,9].includes(m % 12);
+const KW = 23.5, FOV = 72;
+
+// ---------- câmara e processamento ----------
+const RZW = 640;                     // largura de análise (px)
+const vid = $('vid');
+let stream = null;
+const rz = { cv:document.createElement('canvas'), ctx:null, H:360, sc:1, bg:null, prev:[], touches:[], hovers:[], active:new Map(), offT:new Map(), missT:new Map(),
+  yTop:0, yl:null, calib:null, lastT:0, tracks:[], hist:[], accC:null, accY:null, gapS:null, gap:null };
+rz.ctx = rz.cv.getContext('2d', { willReadFrequently:true });
+function rzSize(){ rz.sc = RZW/(vid.videoWidth || 640); rz.H = Math.round((vid.videoHeight || 360)*rz.sc); }
+function grab(y0, h){
+  if (rz.cv.width !== RZW || rz.cv.height !== h){ rz.cv.width = RZW; rz.cv.height = h; }
+  rz.ctx.drawImage(vid, 0, y0/rz.sc, vid.videoWidth, h/rz.sc, 0, 0, RZW, h);
+  return rz.ctx.getImageData(0, 0, RZW, h).data;
+}
+const cal = () => store.cal;
+const lineB = () => cal().b0 + S.lineOff;
+const ly = x => cal().a*x + lineB();
+
+function releaseAll(){ for (const m of rz.active.keys()) noteOff(m); rz.active.clear(); rz.missT.clear(); rz.prev = []; rz.touches = []; rz.hovers = []; rz.tracks = []; rz.hist = []; rz.accC = null; rz.gapS = null; }
+
+function processFrame(t){
+  const c = cal();
+  if (rz.calib){ calFrame(); return; }
+  if (!c) return;
+  const ya = ly(0), yb = ly(RZW - 1);
+  const yTop = Math.max(0, Math.floor(Math.min(ya, yb) - 100)), yBot = Math.min(rz.H, Math.ceil(Math.max(ya, yb) + 24)), h = yBot - yTop;
+  if (h < 20) return;
+  const data = grab(yTop, h), n = RZW*h, m = new Uint8Array(n), bg = rz.bg ? rz.bg.subarray(yTop*RZW, yBot*RZW) : null;
+  // ruído no tempo, por píxel: parado → média; mudança a sério → segue logo
+  const init = !rz.accC || rz.accC.length !== n || rz.yTop !== yTop;
+  if (init){ rz.accC = new Float32Array(n); rz.accY = new Float32Array(n); }
+  const aC = rz.accC, aY = rz.accY;
+  for (let i = 0, j = 0; i < n; i++, j += 4){
+    const R = data[j], G = data[j+1], B = data[j+2], cc = 0.6687*R - 0.0874*G - 0.5813*B, yy = 0.299*R + 0.587*G + 0.114*B;
+    if (init){ aC[i] = cc; aY[i] = yy; }
+    else { const k = (Math.abs(cc - aC[i]) > 10 || Math.abs(yy - aY[i]) > 25) ? 1 : 0.3; aC[i] += k*(cc - aC[i]); aY[i] += k*(yy - aY[i]); }
+    m[i] = (aC[i] > c.thr && aY[i] > 18 && !(bg && bg[i])) ? 1 : 0;
+  }
+  const yl = rzLowestAt(m, RZW, h, x => ly(x) - yTop, 2), raw = new Float32Array(RZW);
+  for (let x = 0; x < RZW; x++){ const y = yl[x]; if (y >= 0 && y + 1 < h){ const cA = aC[y*RZW+x] - c.thr, cB = aC[(y+1)*RZW+x] - c.thr; if (cA > 0 && cB < 0) yl[x] = y + cA/(cA - cB); } }
+  { const minH = 0.4*c.wr, minW = Math.round(0.5*c.wr); let total = 0, run = 0;
+    for (let x = 0; x <= RZW; x++){
+      let ok = false;
+      if (x < RZW && yl[x] >= 0){ let cnt = 0; for (let y = 0; y < h && cnt < minH; y++) cnt += m[y*RZW+x]; ok = cnt >= minH; if (!ok) yl[x] = -1; }
+      if (ok) run++; else { if (run >= minW) total += run; else for (let k = x - run; k < x; k++) yl[k] = -1; run = 0; }
+    }
+    if (total < 1.2*c.wr) yl.fill(-1);
+  }
+  for (let x = 0; x < RZW; x++) raw[x] = yl[x] < 0 ? 999 : ly(x) - (yl[x] + yTop);
+  const gap = rzMedian5(raw), pxmm = c.wr/16, tauOn = S.tauMm*pxmm, tauOff = tauOn + Math.max(2, 1.5*pxmm);
+  if (rz.gapS && rz.gapS.length === RZW) for (let x = 0; x < RZW; x++){ const a = rz.gapS[x], b = gap[x]; if (a < 900 && b < 900 && Math.abs(a - b) < 3.5) gap[x] = a + 0.4*(b - a); }
+  rz.gapS = gap;
+  const res = rzAnalyze(gap, RZW, c.wr, tauOn, tauOff, rz.prev);
+  const follow = (old, val, big) => Math.abs(val - old) > big ? val : old + 0.35*(val - old);
+  rz.hist.push({ t, gap }); while (rz.hist.length && t - rz.hist[0].t > 0.3) rz.hist.shift();
+  for (const tc of res.touches){
+    let pv = null, bd = 0.6*c.wr; for (const q of rz.prev){ const d = Math.abs(q.x - tc.x); if (d < bd){ bd = d; pv = q; } }
+    tc.xs = pv ? follow(pv.xs, tc.x, 0.35*c.wr) : tc.x; tc.pens = pv ? follow(pv.pens, tc.pen, 4) : tc.pen;
+    if (pv){ tc.snd = pv.snd; tc.vel = pv.vel; tc.f = pv.f; continue; }
+    let best = 0, tb = t;
+    for (const fr of rz.hist){
+      if (fr.t >= t || t - fr.t > 0.25) continue;
+      let g = 999; for (let x = Math.max(0, Math.round(tc.x - tc.w/3)); x <= Math.min(RZW-1, Math.round(tc.x + tc.w/3)); x++) g = Math.min(g, fr.gap[x]);
+      g = Math.min(g, 60); if (g > best){ best = g; tb = fr.t; }
+    }
+    const speed = (best/pxmm)/Math.max(t - tb, 1/60);
+    tc.snd = true; tc.vel = clamp(0.3 + speed/500, 0.3, 1);
+  }
+  const used = new Set();
+  for (const hv of res.hovers){
+    let bt = null, bd = 0.6*c.wr; for (const tr of rz.tracks){ const d = Math.abs(tr.x - hv.x); if (d < bd && !used.has(tr)){ bd = d; bt = tr; } }
+    if (bt){ used.add(bt); bt.x = follow(bt.x, hv.x, 0.4*c.wr); bt.gap = follow(bt.gap, hv.gap, 5); bt.age++; bt.miss = 0; }
+    else { const tr = { x:hv.x, gap:hv.gap, age:1, miss:0 }; rz.tracks.push(tr); used.add(tr); }
+  }
+  rz.tracks = rz.tracks.filter(tr => used.has(tr) || ++tr.miss <= 2);
+  res.hovers = rz.tracks.filter(tr => tr.age >= 3);
+  rz.yl = yl; rz.yTop = yTop; rz.gap = gap;
+  toNotes(res, t, c);
+}
+
+// ---------- dos toques às notas ----------
+function toKey(x, pen){
+  const c = cal(), keyPx = S.keyScale*c.wr, depthOk = (c.pb || 0) >= 1.2, mode = S.blackMode === 'depth' && !depthOk ? 'lateral' : S.blackMode;
+  const dfrac = depthOk ? clamp(pen/c.pb, -0.5, 2) : 0, zref = (RZW/2)/Math.tan(FOV*Math.PI/360)*16/c.wr;
+  const xc = RZW/2 + (x - RZW/2)*(1 - 55*dfrac/zref);
+  const w = S.center + (c.flip ? -1 : 1)*(c.x0 - xc)/keyPx;       // posição em teclas brancas
+  const i = Math.floor(w), fr = w - i, white = WHITES[clamp(i, 0, WHITES.length - 1)];
+  const blackAt = j => (j >= 0 && j < WHITES.length - 1 && hasBlackAfter(WHITES[j])) ? WHITES[j] + 1 : null;
+  if (mode === 'lateral'){
+    const bh = S.blackHalf/KW;
+    if (fr < bh && blackAt(i - 1) != null) return { midi:blackAt(i - 1), black:true, w };
+    if (fr > 1 - bh && blackAt(i) != null) return { midi:blackAt(i), black:true, w };
+  } else if (mode === 'depth' && dfrac >= 0.5){
+    const first = fr < 0.5 ? [i - 1, i] : [i, i - 1];
+    for (const j of first){ const b = blackAt(j); if (b != null) return { midi:b, black:true, w }; }
+  }
+  return { midi:white, black:false, w };
+}
+function toNotes(res, t, c){
+  // mãos reconhecidas (em segundo plano): dedo de cada toque e palma/pulso fora
+  const H = hands.res && t - hands.res.t < 0.35 ? hands.res : null, tips = [], spans = [];
+  if (H) for (const pts of H.hands){
+    let x1 = 1e9, x2 = -1e9; for (const q of pts){ x1 = Math.min(x1, q[0]); x2 = Math.max(x2, q[0]); }
+    spans.push([x1 - 0.3*c.wr, x2 + 0.3*c.wr]);
+    for (let f = 0; f < 5; f++){ const q = pts[[4,8,12,16,20][f]]; tips.push({ x:q[0], y:q[1], f, used:false }); }
+  }
+  if (tips.length){
+    for (const tc of res.touches){
+      let bt = null, bd = 0.9*c.wr; for (const tp of tips){ const d = Math.abs(tp.x - tc.x); if (d < bd && !tp.used && Math.abs(tp.y - ly(tp.x)) < 2.5*c.wr){ bd = d; bt = tp; } }
+      const pv = rz.prev.find(q => Math.abs(q.x - tc.x) < 0.6*c.wr);
+      if (bt){ bt.used = true; tc.f = bt.f; }
+      else if (pv && pv.f != null) tc.f = pv.f;
+      else if (spans.some(sp => tc.x > sp[0] && tc.x < sp[1])) tc.ignore = !(pv && pv.snd);
+    }
+    res.touches = res.touches.filter(tc => !tc.ignore);
+    // pontas no ar: só as que estão perto de uma ponta reconhecida (corta pontos falsos de cor parecida com pele)
+    res.hovers = res.hovers.filter(hv => tips.some(tp => Math.abs(tp.x - hv.x) < 1.2*c.wr));
+  }
+  const now = new Map();
+  for (const tc of res.touches){
+    const pv = rz.prev.find(p => Math.abs(p.x - tc.x) < 0.5*c.wr && p.midi != null);
+    const k = toKey(tc.xs, tc.pens); let midi = k.midi;
+    if (pv && midi !== pv.midi && pv.black === k.black && Math.abs(k.w - pv.w) < 0.25) midi = pv.midi;   // perto da fronteira: fica a tecla anterior
+    tc.midi = midi; tc.w = k.w; tc.black = k.black;
+    if (tc.snd && midi != null && !now.has(midi)) now.set(midi, tc);
+  }
+  for (const [midi, tc] of now){
+    if (rz.active.has(midi)) continue;
+    if (t - (rz.offT.get(midi) ?? -9) < 0.04) continue;
+    rz.active.set(midi, 1); noteOn(midi, tc.vel || 0.5);
+  }
+  for (const midi of [...rz.active.keys()]){
+    if (now.has(midi)){ rz.missT.delete(midi); continue; }
+    const t0 = rz.missT.get(midi);
+    if (t0 == null){ rz.missT.set(midi, t); continue; }
+    if (t - t0 >= 0.045){ rz.missT.delete(midi); rz.active.delete(midi); rz.offT.set(midi, t); noteOff(midi); }
+  }
+  rz.prev = res.touches; rz.touches = res.touches; rz.hovers = res.hovers;
+}
+
+// ---------- som ----------
+let sampler = null, audioReady = false;
+async function initAudio(){
+  if (typeof Tone === 'undefined') return;
+  await Tone.start(); Tone.context.lookAhead = 0;
+  if (sampler) return;
+  sampler = new Tone.Sampler({
+    urls: { A0:'A0.mp3', C1:'C1.mp3', 'D#1':'Ds1.mp3', 'F#1':'Fs1.mp3', A1:'A1.mp3', C2:'C2.mp3', 'D#2':'Ds2.mp3', 'F#2':'Fs2.mp3', A2:'A2.mp3',
+            C3:'C3.mp3', 'D#3':'Ds3.mp3', 'F#3':'Fs3.mp3', A3:'A3.mp3', C4:'C4.mp3', 'D#4':'Ds4.mp3', 'F#4':'Fs4.mp3', A4:'A4.mp3',
+            C5:'C5.mp3', 'D#5':'Ds5.mp3', 'F#5':'Fs5.mp3', A5:'A5.mp3', C6:'C6.mp3', 'D#6':'Ds6.mp3', 'F#6':'Fs6.mp3', A6:'A6.mp3' },
+    release: 1.2, baseUrl: 'https://tonejs.github.io/audio/salamander/', onload: () => { audioReady = true; }
+  }).toDestination();
+  sampler.volume.value = S.volume;
+}
+let lastNote = { m:null, t:0 };
+function noteOn(midi, vel){
+  if (audioReady){ try { sampler.triggerAttack(Tone.Frequency(midi, 'midi').toNote(), Tone.now(), vel); } catch(e){} }
+  lastNote = { m:midi, t:performance.now() }; $('note').textContent = noteName(midi);
+}
+function noteOff(midi){ if (audioReady){ try { sampler.triggerRelease(Tone.Frequency(midi, 'midi').toNote(), Tone.now()); } catch(e){} } }
+
+// ---------- mãos em segundo plano (MediaPipe num worker: nunca atrasa a câmara) ----------
+const hands = { w:null, busy:false, ready:false, res:null, ms:0, err:'', lastSend:0 };
+function handsStart(){
+  if (hands.w || !S.hands || typeof Worker === 'undefined' || typeof createImageBitmap === 'undefined') return;
+  try { hands.w = new Worker('maos.js'); } catch(e){ hands.err = 'sem worker'; return; }
+  hands.w.onmessage = e => {
+    const d = e.data;
+    if (d.type === 'ready'){ hands.ready = true; hands.err = ''; hands.dev = d.delegate; }
+    else if (d.type === 'error'){ hands.err = d.msg || 'erro'; hands.ready = false; }
+    else if (d.type === 'res'){
+      hands.busy = false; hands.ms = 0.8*hands.ms + 0.2*d.ms;
+      // coordenadas normalizadas → px de análise
+      hands.res = { t:d.t, hands:(d.hands || []).map(h => h.map(p => [p[0]*RZW, p[1]*rz.H])) };
+    }
+  };
+  hands.w.onerror = () => { hands.err = 'falhou'; hands.busy = false; };
+}
+function handsStop(){ if (hands.w){ hands.w.terminate(); hands.w = null; } hands.ready = false; hands.busy = false; hands.res = null; }
+function handsFeed(t){
+  if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < 0.05) return;
+  hands.busy = true; hands.lastSend = t;
+  createImageBitmap(vid).then(bmp => { if (!hands.w){ bmp.close(); return; } hands.w.postMessage({ bmp, ts:Math.round(t*1000), t }, [bmp]); })
+    .catch(() => { hands.busy = false; });
+}
+
+// ---------- calibração (4 passos) ----------
+let msgTimer = null;
+function banner(txt, ms){ const b = $('msg'); b.textContent = txt; b.style.display = txt ? 'block' : 'none'; clearTimeout(msgTimer); if (ms) msgTimer = setTimeout(() => { b.style.display = 'none'; }, ms); }
+async function camLock(on){
+  try {
+    const tr = stream && stream.getVideoTracks()[0]; if (!tr || !tr.getCapabilities) return;
+    const cap = tr.getCapabilities(), m = on ? 'manual' : 'continuous', adv = {};
+    for (const k of ['exposureMode','whiteBalanceMode','focusMode']) if (cap[k] && cap[k].includes(m)) adv[k] = m;
+    if (Object.keys(adv).length) await tr.applyConstraints({ advanced:[adv] });
+  } catch(e){}
+}
+function startCal(){
+  if (!stream || rz.calib) return;
+  $('pop').style.display = 'none'; releaseAll(); rzSize();
+  const C = rz.calib = { phase:null, n:0, cnt:null, cols:null, timers:[] };
+  layout();
+  const seq = (phase, txt, t0) => {
+    for (let k = 0; k < 4; k++) C.timers.push(setTimeout(() => banner(`${txt}… ${4-k}`), t0 + k*1000));
+    C.timers.push(setTimeout(() => { C.phase = phase; C.n = 0; C.cnt = new Uint16Array(RZW*rz.H); C.cols = Array.from({length:RZW}, () => []); banner('Não mexas…'); }, t0 + 4000));
+    C.timers.push(setTimeout(() => calEnd(phase), t0 + 5200));
+  };
+  camLock(false); C.timers.push(setTimeout(() => camLock(true), 5600 + 2800));
+  seq('bg', 'Passo 1/4 · Tira as mãos da frente da câmara', 0);
+  seq('white', 'Passo 2/4 · Pousa as PONTAS dos dedos das duas mãos na mesa, onde queres tocar', 5600);
+  seq('side', 'Passo 3/4 · Tira a mão DIREITA (põe-na no colo) e deixa a ESQUERDA pousada', 11200);
+  seq('black', 'Passo 4/4 · Pousa as duas mãos outra vez, com os dedos uns 6 cm mais perto do telemóvel', 16800);
+}
+function calFrame(){
+  const C = rz.calib; if (!C.phase) return;
+  const n = RZW*rz.H, data = grab(0, rz.H), thr = (cal() && cal().thr) || 7;
+  const m = rzSkin(data, n, thr, C.phase === 'bg' ? null : rz.bg, new Uint8Array(n));
+  C.n++;
+  if (C.phase === 'bg'){ for (let i = 0; i < n; i++) C.cnt[i] += m[i]; return; }
+  for (let i = 0; i < RZW*Math.round(rz.H*0.3); i++) m[i] = 0;
+  const yl = rzLowest(m, RZW, rz.H);
+  for (let x = 0; x < RZW; x++) if (yl[x] >= 0) C.cols[x].push(yl[x]);
+}
+function calEnd(phase){
+  const C = rz.calib; if (!C) return; C.phase = null;
+  const fail = msg => { C.timers.forEach(clearTimeout); rz.calib = null; banner(msg, 5000); };
+  if (C.n < 4) return fail('A câmara não deu imagens suficientes. Repete.');
+  if (phase === 'bg'){
+    const b0 = new Uint8Array(RZW*rz.H); for (let i = 0; i < b0.length; i++) b0[i] = C.cnt[i] >= 0.3*C.n ? 1 : 0;
+    const b = new Uint8Array(b0.length);
+    for (let y = 0; y < rz.H; y++) for (let x = 0; x < RZW; x++){ if (!b0[y*RZW+x]) continue; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++){ const X = x+dx, Y = y+dy; if (X >= 0 && X < RZW && Y >= 0 && Y < rz.H) b[Y*RZW+X] = 1; } }
+    rz.bg = b; return;
+  }
+  const yl = new Float32Array(RZW);
+  for (let x = 0; x < RZW; x++){ const v = C.cols[x]; if (v.length < 0.5*C.n) yl[x] = -1; else { v.sort((p,q) => p-q); yl[x] = v[v.length>>1]; } }
+  if (phase === 'white'){
+    const ln = rzFitLine(yl); if (!ln) return fail('Não vi os dedos pousados. Repete com mais luz à frente das mãos.');
+    const runs = []; let x = 0, xmin = RZW, xmax = 0;
+    while (x < RZW){ if (yl[x] >= 0 && ln.a*x + ln.b - yl[x] <= 3){ const x1 = x; while (x < RZW && yl[x] >= 0 && ln.a*x + ln.b - yl[x] <= 3) x++; if (x - x1 >= 6){ runs.push(x - x1); xmin = Math.min(xmin, x1); xmax = Math.max(xmax, x); } } else x++; }
+    if (!runs.length) return fail('Não consegui medir os dedos. Repete com os dedos um pouco afastados.');
+    const single = runs.filter(w => w <= 60).sort((p,q) => p-q), wr = single.length ? single[single.length>>1] : 24;
+    store.cal = { a:ln.a, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr:(cal() && cal().thr) || 7, flip:!!(cal() && cal().flip), vw:vid.videoWidth, vh:vid.videoHeight };
+    S.lineOff = 0; $('line').value = 0;
+    return;
+  }
+  if (phase === 'side'){
+    const c0 = cal(); if (!c0) return fail('Calibração incompleta. Repete.');
+    let l = 0, r = 0; for (let x = 0; x < RZW; x++) if (yl[x] >= 0 && ly(x) - yl[x] <= 45){ if (x < c0.x0) l++; else r++; }
+    if (Math.max(l, r) >= 12 && (l > 2*r || r > 2*l)) c0.flip = l > r;     // câmara de frente: a mão esquerda aparece à direita da imagem
+    return;
+  }
+  const c = cal(); if (!c) return fail('Calibração incompleta. Repete.');
+  const pens = []; for (let x = 0; x < RZW; x++) if (yl[x] >= 0){ const p = yl[x] - ly(x); if (p > -3 && p < 60) pens.push(p); }
+  pens.sort((p,q) => p-q); c.pb = pens.length > 20 ? Math.max(0, pens[Math.floor(pens.length*0.75)]) : 0;
+  save(); rz.calib = null; releaseAll(); showUI(); layout();
+  banner(c.pb >= 1.2 ? 'Calibrado. Brancas na linha; pretas com o dedo mais à frente.' : 'Calibrado. Pretas: põe o dedo em cima da risca entre duas brancas.', 4500);
+}
+
+// ---------- desenho (por cima do vídeo) ----------
+const ov = $('ov'), g = ov.getContext('2d');
+let dpr = 1, SW = 0, SH = 0;
+const L = { s:1, dx:0, dy:0, PH:0 };
+function resize(){ dpr = Math.min(1.5, devicePixelRatio || 1); SW = innerWidth; SH = innerHeight; ov.width = Math.round(SW*dpr); ov.height = Math.round(SH*dpr); g.setTransform(dpr, 0, 0, dpr, 0, 0); layout(); }
+addEventListener('resize', resize);
+// Vídeo a cobrir o ecrã, deslocado na vertical para a linha da mesa ficar logo acima do piano (o piano nunca tapa os dedos).
+function layout(){
+  const vw = vid.videoWidth || 640, vh = vid.videoHeight || 360, s = Math.max(SW/vw, SH/vh);
+  L.s = s; L.PH = Math.round(SH*0.22); L.dx = (SW - vw*s)/2;
+  if (cal() && !rz.calib){
+    const lineY = (lineB() + cal().a*RZW/2)/rz.sc, target = SH - L.PH - Math.max(14, SH*0.05);
+    L.dy = clamp(target - lineY*s, SH - vh*s - L.PH, 0);
+  } else L.dy = (SH - vh*s)*0.35;
+  Object.assign(vid.style, { width:vw*s + 'px', height:vh*s + 'px', left:L.dx + 'px', top:L.dy + 'px' });
+}
+vid.addEventListener('loadedmetadata', () => { rzSize(); layout(); });
+// px de análise → ecrã (espelhado, como um espelho: a tua mão direita aparece à direita)
+function toScr(x, y){ return [SW - (L.dx + (x/rz.sc)*L.s), L.dy + (y/rz.sc)*L.s]; }
+function draw(){
+  g.clearRect(0, 0, SW, SH);
+  const c = cal(); if (!c || rz.calib) return;
+  const AQ = '#2cc7b8', keyPx = S.keyScale*c.wr, sgn = c.flip ? -1 : 1;
+  const xOfW = w => c.x0 - sgn*(w - S.center)*keyPx;          // px de análise da fronteira esquerda da tecla branca w
+  // linha de toque
+  const p0 = toScr(0, ly(0)), p1 = toScr(RZW, ly(RZW));
+  g.strokeStyle = 'rgba(44,199,184,0.7)'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(p0[0], p0[1]); g.lineTo(p1[0], p1[1]); g.stroke();
+  // piano em baixo, alinhado com a imagem: cada tecla fica por baixo do sítio onde se toca
+  const PH = L.PH, PY = SH - PH, depthOk = (c.pb || 0) >= 1.2, mode = S.blackMode === 'depth' && !depthOk ? 'lateral' : S.blackMode;
+  const act = rz.active, hov = new Set(); for (const h of rz.hovers){ const k = toKey(h.x, 0); hov.add(k.midi); }
+  const keys = [];
+  for (let i = Math.floor(S.center - RZW/keyPx) - 1; i <= Math.ceil(S.center + RZW/keyPx) + 1; i++){
+    if (i < 0 || i >= WHITES.length) continue;
+    const xa = toScr(xOfW(i), 0)[0], xb = toScr(xOfW(i + 1), 0)[0], X = Math.min(xa, xb), Wd = Math.abs(xb - xa);
+    if (X > SW || X + Wd < 0) continue;
+    keys.push({ i, X, Wd });
+  }
+  g.lineWidth = 1.2; g.textAlign = 'center'; g.textBaseline = 'bottom';
+  for (const k of keys){
+    const m = WHITES[k.i];
+    g.fillStyle = act.has(m) ? 'rgba(44,199,184,0.85)' : (hov.has(m) ? 'rgba(44,199,184,0.28)' : 'rgba(2,11,10,0.45)');
+    g.fillRect(k.X, PY, k.Wd, PH); g.strokeStyle = AQ; g.strokeRect(k.X + 0.5, PY + 0.5, k.Wd - 1, PH - 1);
+    if (S.labels !== 'off'){ const fs = Math.min(13, k.Wd*0.32); if (fs >= 7){ g.font = `600 ${fs}px Inter, system-ui`; g.fillStyle = act.has(m) ? '#021110' : (m % 12 === 0 ? '#eafaf7' : '#9cc9c3'); g.fillText(noteName(m), k.X + k.Wd/2, SH - 4); } }
+  }
+  if (mode !== 'off') for (const k of keys){
+    const m = WHITES[k.i]; if (!hasBlackAfter(m) || k.i + 1 >= WHITES.length) continue;
+    const half = mode === 'lateral' ? S.blackHalf/KW : 0.29;
+    const xa = toScr(xOfW(k.i + 1 - half), 0)[0], xb = toScr(xOfW(k.i + 1 + half), 0)[0], X = Math.min(xa, xb), Wd = Math.abs(xb - xa);
+    const bm = m + 1;
+    g.fillStyle = act.has(bm) ? 'rgba(44,199,184,0.95)' : (hov.has(bm) ? 'rgba(21,120,110,0.9)' : 'rgba(2,14,13,0.92)');
+    g.fillRect(X, PY, Wd, PH*0.58); g.strokeStyle = AQ; g.strokeRect(X + 0.5, PY + 0.5, Wd - 1, PH*0.58 - 1);
+  }
+  // pontas dos dedos: anel verde-água; cheio quando está a tocar
+  g.lineWidth = 2.5; g.strokeStyle = AQ; g.fillStyle = AQ;
+  for (const h of rz.hovers){ const p = toScr(h.x, ly(h.x) - h.gap); g.beginPath(); g.arc(p[0], p[1], 9, 0, Math.PI*2); g.stroke(); }
+  for (const q of rz.touches){ const p = toScr(q.xs, ly(q.xs) + Math.min(q.pens, 0)); g.beginPath(); g.arc(p[0], p[1], 9, 0, Math.PI*2); g.fill(); g.stroke(); }
+  if (S.debug){
+    g.fillStyle = '#ff7a6b'; if (rz.yl) for (let x = 0; x < RZW; x += 2) if (rz.yl[x] >= 0){ const p = toScr(x, rz.yl[x] + rz.yTop); g.fillRect(p[0] - 1, p[1] - 1, 2.5, 2.5); }
+    if (hands.res && performance.now()/1000 - hands.res.t < 0.5){ g.fillStyle = '#ffd36b'; for (const pts of hands.res.hands) for (const k of [4,8,12,16,20]){ const p = toScr(pts[k][0], pts[k][1]); g.fillRect(p[0] - 3, p[1] - 3, 6, 6); } }
+    g.font = '600 11px Inter, system-ui'; g.fillStyle = '#eafaf7'; g.textBaseline = 'middle';
+    for (const q of rz.touches){ const p = toScr(q.xs, ly(q.xs)); g.fillText(q.pens.toFixed(1), p[0], p[1] - 18); }
+  }
+}
+
+// ---------- ciclo principal: uma análise por imagem nova da câmara ----------
+const perf = { n:0, t0:0, fps:0, ms:0 };
+function onFrame(){
+  const t = performance.now()/1000;
+  if (vid.readyState >= 2 && vid.videoWidth){
+    if (!rz.H || rz.cv.dataset.vw !== String(vid.videoWidth)){ rzSize(); rz.cv.dataset.vw = String(vid.videoWidth); }
+    const a = performance.now();
+    try { processFrame(t); } catch(e){ console.warn(e); }
+    perf.ms = 0.9*perf.ms + 0.1*(performance.now() - a);
+    handsFeed(t);
+    draw();
+    perf.n++;
+    if (t - perf.t0 >= 1){ perf.fps = Math.round(perf.n/(t - perf.t0)); perf.n = 0; perf.t0 = t; statUpdate(); }
+    if (performance.now() - lastNote.t > 1500) $('note').textContent = '';
+  }
+  schedule();
+}
+function schedule(){ if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) vid.requestVideoFrameCallback(onFrame); else requestAnimationFrame(onFrame); }
+function statUpdate(){
+  const tr = stream && stream.getVideoTracks()[0], st = tr && tr.getSettings ? tr.getSettings() : {};
+  const hm = !S.hands ? 'mãos off' : (hands.err ? 'mãos: ' + hands.err : (hands.ready ? `mãos ${hands.ms.toFixed(0)} ms` : 'mãos a carregar'));
+  $('stat').textContent = `${APP_VER} · ${perf.fps} FPS · ${perf.ms.toFixed(1)} ms · ${hm}${audioReady ? '' : ' · som a carregar'}`;
+  $('ver').textContent = `${APP_VER} · câmara ${vid.videoWidth}×${vid.videoHeight} a ${st.frameRate ? Math.round(st.frameRate) : '?'} fps`;
+}
+
+// ---------- arranque ----------
+async function openCam(){
+  const tries = [
+    { facingMode:'user', width:{ ideal:640 }, height:{ ideal:360 }, frameRate:{ ideal:30, min:24 } },
+    { facingMode:'user', width:{ ideal:640 }, height:{ ideal:360 }, frameRate:{ ideal:30 } },
+    { facingMode:'user' }
+  ];
+  let err = null;
+  for (const v of tries){ try { return await navigator.mediaDevices.getUserMedia({ video:v, audio:false }); } catch(e){ err = e; } }
+  throw err;
+}
+function showUI(){ $('slide').style.display = cal() ? 'flex' : 'none'; $('lineV').textContent = S.lineOff; }
+$('bGo').onclick = async () => {
+  initAudio().catch(() => {});
+  try { await document.documentElement.requestFullscreen(); await screen.orientation.lock('landscape'); } catch(e){}
+  try { stream = await openCam(); }
+  catch(e){ $('startErr').textContent = 'Não consegui abrir a câmara (' + (e.name || e) + '). Permite a câmara para este site e tenta outra vez.'; return; }
+  vid.srcObject = stream; try { await vid.play(); } catch(e){}
+  try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){}
+  $('start').style.display = 'none'; resize(); showUI(); handsStart();
+  if (!cal()) banner('Toca em “Calibrar” para começar.', 6000);
+  else camLock(true);
+  schedule();
+};
+document.addEventListener('visibilitychange', async () => { if (!document.hidden && stream){ try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){} } });
+$('bCal').onclick = startCal;
+const shift = d => { S.center = clamp(S.center + 7*d, 7, WHITES.length - 8); save(); releaseAll(); };
+$('bDn').onclick = () => shift(-1); $('bUp').onclick = () => shift(1);
+$('bFlip').onclick = () => { if (cal()){ cal().flip = !cal().flip; save(); releaseAll(); banner('Lados invertidos.', 1500); } };
+$('line').oninput = e => { S.lineOff = +e.target.value; $('lineV').textContent = S.lineOff; releaseAll(); save(); layout(); };
+$('bSet').onclick = () => { const p = $('pop'); p.style.display = p.style.display === 'block' ? 'none' : 'block'; renderPop(); };
+function seg(id, key, conv){ for (const b of $(id).querySelectorAll('button')){ b.onclick = () => { S[key] = conv(b.dataset.v); save(); renderPop(); releaseAll(); if (key === 'hands'){ S.hands ? handsStart() : handsStop(); } }; } }
+seg('blk', 'blackMode', v => v); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1');
+function renderPop(){
+  $('tau').value = S.tauMm; $('tauV').textContent = S.tauMm + ' mm'; $('ks').value = S.keyScale; $('ksV').textContent = S.keyScale.toFixed(2) + '×';
+  $('vol').value = S.volume; $('volV').textContent = S.volume + ' dB';
+  for (const [id, key, f] of [['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
+  $('bDbg').classList.toggle('on', S.debug);
+}
+$('tau').oninput = e => { S.tauMm = +e.target.value; save(); renderPop(); };
+$('ks').oninput = e => { S.keyScale = +e.target.value; save(); renderPop(); releaseAll(); };
+$('vol').oninput = e => { S.volume = +e.target.value; if (sampler) sampler.volume.value = S.volume; save(); renderPop(); };
+$('bDbg').onclick = () => { S.debug = !S.debug; save(); renderPop(); };
+// Diagnóstico: 6 imagens da câmara (sem desenhos) numa folha PNG com os dados, para afinar com imagens reais
+$('bDiag').onclick = () => {
+  if (!stream || rz.calib) return; $('pop').style.display = 'none';
+  const steps = ['Tira as mãos da mesa', 'Pousa as PONTAS dos dedos das duas mãos', 'Levanta todos os dedos cerca de 1 cm', 'Pousa só o INDICADOR DIREITO', 'Pousa só o INDICADOR ESQUERDO', 'Toca como no piano e carrega 3 teclas'];
+  const FW = 640, FH = Math.round(640*vid.videoHeight/vid.videoWidth), sh = document.createElement('canvas'); sh.width = 2*FW; sh.height = 3*FH + 90;
+  const sg = sh.getContext('2d'); sg.fillStyle = '#000'; sg.fillRect(0, 0, sh.width, sh.height);
+  steps.forEach((txt, i) => {
+    for (let k = 0; k < 4; k++) setTimeout(() => banner(`Diagnóstico ${i+1}/6 · ${txt}… ${4-k}`), i*4600 + k*1000);
+    setTimeout(() => { sg.drawImage(vid, (i % 2)*FW, Math.floor(i/2)*FH, FW, FH); banner('Registado.', 500); }, i*4600 + 4000);
+  });
+  setTimeout(() => {
+    const c = cal(), tr = stream.getVideoTracks()[0], st = tr.getSettings ? tr.getSettings() : {};
+    const info = [`Piano Digital ${APP_VER} · ${new Date().toISOString()} · video ${vid.videoWidth}x${vid.videoHeight} @${st.frameRate || '?'} · ${perf.fps} FPS · ${perf.ms.toFixed(1)} ms · maos ${hands.ready ? hands.ms.toFixed(0) + ' ms' : hands.err || 'off'}`,
+      c ? `cal a=${c.a.toFixed(5)} b0=${c.b0.toFixed(2)} off=${S.lineOff} wr=${c.wr.toFixed(1)} x0=${c.x0.toFixed(1)} pb=${c.pb.toFixed(2)} thr=${c.thr} flip=${c.flip ? 1 : 0}` : 'sem calibracao',
+      `tau=${S.tauMm}mm keyScale=${S.keyScale} pretas=${S.blackMode} exp=${st.exposureMode || '?'} wb=${st.whiteBalanceMode || '?'}`, navigator.userAgent.slice(0, 150)];
+    sg.fillStyle = '#fff'; sg.font = '15px monospace'; sg.textBaseline = 'top'; info.forEach((t, i) => sg.fillText(t, 8, 3*FH + 6 + i*20));
+    sh.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'piano-digital-diagnostico.png'; document.body.appendChild(a); a.click(); a.remove(); banner('Diagnóstico guardado nas transferências.', 5000); }, 'image/png');
+  }, 6*4600 + 300);
+};
+$('line').value = S.lineOff; renderPop();
+</script>
+</body>
+</html>
