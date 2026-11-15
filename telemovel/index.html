@@ -109,7 +109,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-6';
+const APP_VER = 'tel-7';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -234,15 +234,61 @@ const rz = { cv:document.createElement('canvas'), ctx:null, H:360, sc:1, bg:null
   yTop:0, yl:null, calib:null, lastT:0, tracks:[], hist:[], accC:null, accY:null, gapS:null, gap:null };
 rz.ctx = rz.cv.getContext('2d', { willReadFrequently:true });
 function rzSize(){ rz.sc = RZW/(vid.videoWidth || 640); rz.H = Math.round((vid.videoHeight || 360)*rz.sc); }
-function grab(y0, h){
-  // nas primeiras imagens experimenta as duas formas e fica com a mais rápida
-  const use = GR.mode || (GR.n % 20 < 10 ? 'cpu' : 'gpu'), cv = GR.cv[use], cx = GR.ctx[use], a = performance.now();
+// Três formas de ler a faixa da imagem. A app experimenta-as e fica com a mais rápida neste telemóvel:
+//  · yuv: WebCodecs — copia em segundo plano só as linhas pedidas, no formato da câmara (Y + U/V); não bloqueia a app
+//  · gpu / cpu: desenhar o vídeo num canvas e ler os píxeis (bloqueia enquanto espera pela placa gráfica)
+// C = Cr − Cb (o "avermelhado" da pele), Y = luminosidade — as mesmas grandezas nas três formas.
+const RD = { mode:null, n:0, t:{}, c:{}, ms:0, fail:{} };
+function rdReset(){ RD.mode = null; RD.n = 0; RD.t = {}; RD.c = {}; }
+function rdModes(){ return ['yuv', 'gpu', 'cpu'].filter(m => !RD.fail[m] && (m !== 'yuv' || typeof VideoFrame !== 'undefined')); }
+async function readCY(y0, h){
+  const modes = rdModes(), use = RD.mode && !RD.fail[RD.mode] ? RD.mode : modes[Math.floor(RD.n/8) % modes.length], a = performance.now();
+  let out = null;
+  try { out = use === 'yuv' ? await cyYUV(y0, h) : cyCanvas(use, y0, h); }
+  catch(e){ RD.fail[use] = true; if (RD.mode === use) RD.mode = null; out = cyCanvas(RD.fail.gpu ? 'cpu' : 'gpu', y0, h); }
+  const dt = performance.now() - a; RD.ms = 0.9*RD.ms + 0.1*dt;
+  if (!RD.mode){
+    if (RD.n % 8 >= 2){ RD.t[use] = (RD.t[use] || 0) + dt; RD.c[use] = (RD.c[use] || 0) + 1; }
+    if (++RD.n >= 8*modes.length*2){
+      // a forma yuv não bloqueia a app: ganha mesmo que demore até 1,5× mais
+      let best = null, bv = 1e9; for (const m of modes){ if (!RD.c[m]) continue; const v = RD.t[m]/RD.c[m]*(m === 'yuv' ? 0.66 : 1); if (v < bv){ bv = v; best = m; } }
+      RD.mode = best || 'gpu';
+    }
+  }
+  return out;
+}
+function cyCanvas(m, y0, h){
+  const d = grab(m, y0, h), n = RZW*h, C = new Float32Array(n), Y = new Float32Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4){ const R = d[j], G = d[j+1], B = d[j+2]; C[i] = 0.6687*R - 0.0874*G - 0.5813*B; Y[i] = 0.299*R + 0.587*G + 0.114*B; }
+  return { C, Y };
+}
+async function cyYUV(y0, h){
+  const f = new VideoFrame(vid, { timestamp:0 });
+  try {
+    const fmt = f.format, vr = f.visibleRect, vw = vid.videoWidth, vh = vid.videoHeight;
+    if (!/^(NV12|I420)/.test(fmt || '') || !vr || Math.abs(vr.width - vw) > 2 || Math.abs(vr.height - vh) > 2) throw new Error('formato');
+    const s = 1/rz.sc, Y0 = Math.max(0, Math.floor(y0*s/2)*2), H0 = Math.min(vr.height - Y0, Math.ceil((h*s + 2)/2)*2);
+    const rect = { x:vr.x, y:vr.y + Y0, width:vr.width - (vr.width % 2), height:H0 };
+    const buf = new Uint8Array(f.allocationSize({ rect })), lay = await f.copyTo(buf, { rect });
+    const full = f.colorSpace && f.colorSpace.fullRange, kc = full ? 1 : 255/224, ky = full ? 1 : 255/219, yo = full ? 0 : 16;
+    const nv = fmt.startsWith('NV12'), n = RZW*h, C = new Float32Array(n), Y = new Float32Array(n);
+    const pY = lay[0], pU = lay[1], pV = nv ? null : lay[2];
+    for (let r = 0; r < h; r++){
+      const vy = Math.min(H0 - 1, Math.floor((y0 + r)*s) - Y0), cy = vy >> 1, rowY = pY.offset + vy*pY.stride, rowU = pU.offset + cy*pU.stride, rowV = nv ? 0 : pV.offset + cy*pV.stride;
+      for (let x = 0, i = r*RZW; x < RZW; x++, i++){
+        const vx = Math.floor(x*s), cx = vx >> 1;
+        const U = nv ? buf[rowU + 2*cx] : buf[rowU + cx], V = nv ? buf[rowU + 2*cx + 1] : buf[rowV + cx];
+        C[i] = (V - U)*kc; Y[i] = (buf[rowY + vx] - yo)*ky;
+      }
+    }
+    return { C, Y };
+  } finally { f.close(); }
+}
+function grab(m, y0, h){
+  const use = m, cv = GR.cv[use], cx = GR.ctx[use];
   if (cv.width !== RZW || cv.height !== h){ cv.width = RZW; cv.height = h; }
   cx.drawImage(vid, 0, y0/rz.sc, vid.videoWidth, h/rz.sc, 0, 0, RZW, h);
-  const data = cx.getImageData(0, 0, RZW, h).data, dt = performance.now() - a;
-  GR.ms = 0.9*GR.ms + 0.1*dt;
-  if (!GR.mode){ if (GR.n % 10 >= 3){ GR.t[use] += dt; GR.c[use]++; } if (++GR.n >= 60) GR.mode = GR.t.cpu/GR.c.cpu <= GR.t.gpu/GR.c.gpu ? 'cpu' : 'gpu'; }
-  return data;
+  return cx.getImageData(0, 0, RZW, h).data;
 }
 const cal = () => (store.cal && (!vid.videoWidth || calValid())) ? store.cal : null;
 const lineB = () => cal().b0 + S.lineOff;
@@ -250,20 +296,25 @@ const ly = x => cal().a*x + lineB();
 
 function releaseAll(){ for (const m of rz.active.keys()) noteOff(m); rz.active.clear(); rz.missT.clear(); rz.prev = []; rz.touches = []; rz.hovers = []; rz.tracks = []; rz.hist = []; rz.accC = null; rz.gapS = null; }
 
-function processFrame(t){
+// faixa da imagem a ler neste momento (null = nenhuma)
+function roi(){
+  if (rz.calib) return rz.calib.phase ? { y0:0, h:rz.H } : null;
+  if (!cal()) return null;
+  const ya = ly(0), yb = ly(RZW - 1), yTop = Math.max(0, Math.floor(Math.min(ya, yb) - 100)), yBot = Math.min(rz.H, Math.ceil(Math.max(ya, yb) + 24));
+  return yBot - yTop >= 20 ? { y0:yTop, h:yBot - yTop } : null;
+}
+function processFrame(t, R, CY){
   const c = cal();
-  if (rz.calib){ calFrame(); return; }
-  if (!c) return;
-  const ya = ly(0), yb = ly(RZW - 1);
-  const yTop = Math.max(0, Math.floor(Math.min(ya, yb) - 100)), yBot = Math.min(rz.H, Math.ceil(Math.max(ya, yb) + 24)), h = yBot - yTop;
-  if (h < 20) return;
-  const data = grab(yTop, h), n = RZW*h, m = new Uint8Array(n), bg = rz.bg ? rz.bg.subarray(yTop*RZW, yBot*RZW) : null;
+  if (rz.calib){ calFrame(CY); return; }
+  if (!c || !R) return;
+  const yTop = R.y0, h = R.h, yBot = yTop + h;
+  const n = RZW*h, m = new Uint8Array(n), bg = rz.bg ? rz.bg.subarray(yTop*RZW, yBot*RZW) : null, CC = CY.C, YY = CY.Y;
   // ruído no tempo, por píxel: parado → média; mudança a sério → segue logo
   const init = !rz.accC || rz.accC.length !== n || rz.yTop !== yTop;
   if (init){ rz.accC = new Float32Array(n); rz.accY = new Float32Array(n); }
   const aC = rz.accC, aY = rz.accY;
-  for (let i = 0, j = 0; i < n; i++, j += 4){
-    const R = data[j], G = data[j+1], B = data[j+2], cc = 0.6687*R - 0.0874*G - 0.5813*B, yy = 0.299*R + 0.587*G + 0.114*B;
+  for (let i = 0; i < n; i++){
+    const cc = CC[i], yy = YY[i];
     if (init){ aC[i] = cc; aY[i] = yy; }
     else { const k = (Math.abs(cc - aC[i]) > 10 || Math.abs(yy - aY[i]) > 25) ? 1 : 0.3; aC[i] += k*(cc - aC[i]); aY[i] += k*(yy - aY[i]); }
     m[i] = (aC[i] > c.thr && aY[i] > 18 && !(bg && bg[i])) ? 1 : 0;
@@ -475,10 +526,11 @@ function startCal(){
   seq('side', 'Passo 3/4 · Tira a mão DIREITA (põe-na no colo) e deixa a ESQUERDA pousada', 11200);
   seq('black', 'Passo 4/4 · Pousa as duas mãos outra vez, com os dedos uns 6 cm mais perto do telemóvel', 16800);
 }
-function calFrame(){
-  const C = rz.calib; if (!C.phase) return;
-  const n = RZW*rz.H, data = grab(0, rz.H), thr = (cal() && cal().thr) || 7;
-  const m = rzSkin(data, n, thr, C.phase === 'bg' ? null : rz.bg, new Uint8Array(n));
+function calFrame(CY){
+  const C = rz.calib; if (!C.phase || !CY) return;
+  const n = RZW*rz.H, thr = (store.cal && store.cal.thr) || 7, bgm = C.phase === 'bg' ? null : rz.bg, m = new Uint8Array(n);
+  for (let i = 0; i < n; i++) m[i] = (CY.C[i] > thr && CY.Y[i] > 18 && !(bgm && bgm[i])) ? 1 : 0;
+  C.lastC = CY.C;
   C.n++;
   if (C.phase === 'bg'){ for (let i = 0; i < n; i++) C.cnt[i] += m[i]; return; }
   for (let i = 0; i < RZW*Math.round(rz.H*0.3); i++) m[i] = 0;
@@ -506,7 +558,7 @@ function calEnd(phase){
     const old = store.cal;
     // Limiar da cor da pele ajustado a esta luz e a esta mesa: a meio entre a pele dos dedos pousados e a mesa logo à frente deles.
     let thr = (old && old.thr) || 7;
-    { const d = grab(0, rz.H), sk = [], tb = [], cc = i => 0.6687*d[4*i] - 0.0874*d[4*i+1] - 0.5813*d[4*i+2];
+    if (C.lastC){ const d = C.lastC, sk = [], tb = [], cc = i => d[i];
       for (let x = 0; x < RZW; x++){
         const L = Math.round(ln.a*x + ln.b);
         if (yl[x] >= 0 && L - yl[x] <= 3) for (let y = L - Math.round(0.5*wr); y <= L - 2; y++) if (y >= 0) sk.push(cc(y*RZW + x));
@@ -515,7 +567,7 @@ function calEnd(phase){
       const pct = (a, q) => { a.sort((p, r) => p - r); return a[Math.floor(q*(a.length - 1))]; };
       if (sk.length > 200 && tb.length > 200){ const s15 = pct(sk, 0.15), t97 = pct(tb, 0.97); if (s15 - t97 > 3) thr = clamp((s15 + t97)/2, 4, 18); }
     }
-    store.cal = { a:ln.a, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr, flip:!!(old && old.flip), vw:vid.videoWidth, vh:vid.videoHeight, camKey:camKey() };
+    store.cal = { a:ln.a, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr, flip:!!(old && old.flip), vw:vid.videoWidth, vh:vid.videoHeight, camKey:camKey(), rd:RD.mode || '' };
     S.lineOff = 0; $('line').value = 0;
     return;
   }
@@ -695,7 +747,7 @@ function layout(){
   } else L.dy = (SH - vh*s)*0.35;
   Object.assign(vid.style, { width:vw*s + 'px', height:vh*s + 'px', left:L.dx + 'px', top:L.dy + 'px' });
 }
-vid.addEventListener('loadedmetadata', () => { rzSize(); rz.accC = null; grabReset(); layout(); showUI(); if (store.cal && !calValid()) banner('A imagem da câmara mudou: toca em “Calibrar”.', 6000); });
+vid.addEventListener('loadedmetadata', () => { rzSize(); rz.accC = null; rdReset(); if (store.cal && store.cal.rd && !RD.fail[store.cal.rd]) RD.mode = store.cal.rd; layout(); showUI(); if (store.cal && !calValid()) banner('A imagem da câmara mudou: toca em “Calibrar”.', 6000); });
 // px de análise → ecrã (espelhado, como um espelho: a tua mão direita aparece à direita)
 function toScr(x, y){ return [SW - (L.dx + (x/rz.sc)*L.s), L.dy + (y/rz.sc)*L.s]; }
 function draw(){
@@ -764,29 +816,29 @@ function draw(){
 }
 
 // ---------- ciclo principal: uma análise por imagem nova da câmara ----------
-const perf = { n:0, t0:0, fps:0, ms:0 };
+const perf = { n:0, cam:0, t0:0, fps:0, camFps:0, ms:0, busy:false };
 function onFrame(){
-  const t = performance.now()/1000;
-  if (vid.readyState >= 2 && vid.videoWidth){
-    if (!rz.H || rz.cv.dataset.vw !== String(vid.videoWidth)){ rzSize(); rz.cv.dataset.vw = String(vid.videoWidth); }
-    const a = performance.now();
-    if (GR.mode && t - (GR.evalT || 0) > 15){ GR.evalT = t; grabReset(); }
-    try { processFrame(t); } catch(e){ console.warn(e); }
-    perf.ms = 0.9*perf.ms + 0.1*(performance.now() - a);
-    handsFeed(t);
-    practiceTick(t);
-    draw();
-    perf.n++;
-    if (t - perf.t0 >= 1){ perf.fps = Math.round(perf.n/(t - perf.t0)); perf.n = 0; perf.t0 = t; statUpdate(); }
-    if (performance.now() - lastNote.t > 1500) $('note').textContent = '';
-  }
   schedule();
+  const t = performance.now()/1000;
+  perf.cam++;
+  if (t - perf.t0 >= 1){ perf.fps = Math.round(perf.n/(t - perf.t0)); perf.camFps = Math.round(perf.cam/(t - perf.t0)); perf.n = 0; perf.cam = 0; perf.t0 = t; statUpdate(); }
+  if (perf.busy || vid.readyState < 2 || !vid.videoWidth) return;
+  if (!rz.H || rz.cv.dataset.vw !== String(vid.videoWidth)){ rzSize(); rz.cv.dataset.vw = String(vid.videoWidth); }
+  perf.busy = true;
+  (async () => {
+    const a = performance.now(), R = roi();
+    try { const CY = R ? await readCY(R.y0, R.h) : null; processFrame(performance.now()/1000, R, CY); } catch(e){ console.warn(e); }
+    perf.ms = 0.9*perf.ms + 0.1*(performance.now() - a);
+    const t2 = performance.now()/1000;
+    handsFeed(t2); practiceTick(t2); draw(); perf.n++;
+    if (performance.now() - lastNote.t > 1500) $('note').textContent = '';
+  })().finally(() => { perf.busy = false; });
 }
 function schedule(){ if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) vid.requestVideoFrameCallback(onFrame); else requestAnimationFrame(onFrame); }
 function statUpdate(){
   const tr = stream && stream.getVideoTracks()[0], st = tr && tr.getSettings ? tr.getSettings() : {};
   const hm = !S.hands ? 'mãos off' : (hands.err ? 'mãos: ' + hands.err : (hands.ready ? `mãos ${hands.ms.toFixed(0)} ms` : 'mãos a carregar'));
-  $('stat').textContent = `${APP_VER} · ${perf.fps} FPS · ${perf.ms.toFixed(1)} ms (imagem ${GR.ms.toFixed(1)} ${GR.mode || '…'}) · ${hm}${audioReady ? '' : ' · som a carregar'}`;
+  $('stat').textContent = `${APP_VER} · ${perf.fps}/${perf.camFps} FPS · ${perf.ms.toFixed(1)} ms (imagem ${RD.ms.toFixed(1)} ${RD.mode || '…'}) · ${hm}${audioReady ? '' : ' · som a carregar'}`;
   $('ver').textContent = `${APP_VER} · câmara ${vid.videoWidth}×${vid.videoHeight} a ${st.frameRate ? Math.round(st.frameRate) : '?'} fps`;
 }
 
