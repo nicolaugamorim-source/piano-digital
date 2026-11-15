@@ -89,12 +89,12 @@ body{background:#000}
   <label>Teclas pretas</label>
   <div class="row" id="blk"><button class="btn" data-v="depth">Dedo à frente</button><button class="btn" data-v="lateral">Entre as brancas</button><button class="btn" data-v="off">Desligadas</button></div>
   <label>Como ver os dedos</label>
-  <div class="row" id="detM"><button class="btn" data-v="auto">Pela mesa (recomendado)</button><button class="btn" data-v="skin">Pela cor da pele</button></div>
+  <div class="row" id="detM"><button class="btn" data-v="skin">Pela cor da pele</button><button class="btn" data-v="auto">Pela mesa (experimental)</button></div>
   <label>Teclas pretas: avançar pelo menos <b id="bfV"></b> (dedo mais perto do telemóvel)</label>
   <input type="range" id="bf" min="6" max="35" step="1">
   <label>Nomes nas teclas</label>
   <div class="row" id="lab"><button class="btn" data-v="solfege">Dó Ré Mi</button><button class="btn" data-v="letters">C D E</button><button class="btn" data-v="off">Sem nomes</button></div>
-  <label>Reconhecimento das mãos (ajuda a separar dedos e palma, mas pesa: só se o telemóvel aguentar)</label>
+  <label>Reconhecimento das mãos (confirma que há mesmo um dedo perto da mesa: mãos no ar e roupa não tocam)</label>
   <div class="row" id="hnd"><button class="btn" data-v="1">Ligado</button><button class="btn" data-v="0">Desligado</button></div>
   <label>Câmara</label>
   <div class="row" id="camSz"><button class="btn" data-v="hd">Normal (16:9)</button><button class="btn" data-v="wide">Mais alta (4:3, mais lenta)</button><button class="btn" data-v="small">Pequena (rápida)</button></div>
@@ -114,7 +114,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-11';
+const APP_VER = 'tel-12';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -214,7 +214,7 @@ function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
 
 // ---------- definições ----------
 const KEY = 'pianoDigital.tel.v1';
-const DEF = { detMode:'auto', blackFwd:15, detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:false, debug:false, volume:-4, lineOff:0 };
+const DEF = { detV2:1, gate:true, detMode:'skin', blackFwd:15, detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
 let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
 const S = Object.assign({}, DEF, store.S || {});
 const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
@@ -452,6 +452,7 @@ function toKey(x, pen){
 function toNotes(res, t, c){
   // mãos reconhecidas (em segundo plano): dedo de cada toque e palma/pulso fora
   const H = hands.res && t - hands.res.t < 0.7 ? hands.res : null, tips = [], spans = [];
+  if (H && H.hands.length) hands.seenT = t;
   rz.tipTouch = null;
   if (H) H.hands.forEach((pts, hi) => {
     let x1 = 1e9, x2 = -1e9; for (const q of pts){ x1 = Math.min(x1, q[0]); x2 = Math.max(x2, q[0]); }
@@ -464,9 +465,14 @@ function toNotes(res, t, c){
       tips.push({ x:q[0], y:q[1], f, hi, x0:Math.min(...xs), x1:Math.max(...xs), yLow:Math.max(...ys), used:false });
     }
   });
+  if (!tips.length && S.gate && S.hands && hands.ready && t - (hands.seenT || -9) < 0.5 && H){
+    // as mãos foram vistas há pouco mas agora não há nenhuma ponta: nada pode tocar (exceto dedos que já estavam a tocar)
+    res.touches = res.touches.filter(tc => { const pv = rz.prev.find(q => Math.abs(q.x - tc.x) < 0.6*c.wr); return pv && pv.snd && pv.locked; });
+  }
   if (tips.length){
     const dist = (tp, x) => x < tp.x0 ? tp.x0 - x : (x > tp.x1 ? x - tp.x1 : 0);
-    const near = tp => tp.f === 0 ? Math.abs(tp.yLow - ly((tp.x0 + tp.x1)/2)) < 3*c.wr : Math.abs(tp.y - ly(tp.x)) < 2.5*c.wr;
+    // ponta "perto da mesa": margem larga porque o reconhecimento das mãos chega com algum atraso (o dedo pode ainda estar a descer)
+    const near = tp => tp.f === 0 ? Math.abs(tp.yLow - ly((tp.x0 + tp.x1)/2)) < 3.5*c.wr : Math.abs(tp.y - ly(tp.x)) < 3.5*c.wr;
     // cada toque fica com o dedo mais próximo; os polegares aceitam um pouco mais de distância (tocam de lado)
     const pairs = [];
     res.touches.forEach((tc, k) => { for (const tp of tips){ if (!near(tp)) continue; const d = dist(tp, tc.x), lim = (tp.f === 0 ? 1.3 : 0.9)*c.wr; if (d < lim) pairs.push({ k, tp, d: d - (tp.f === 0 ? 0.2*c.wr : 0) }); } });
@@ -482,6 +488,9 @@ function toNotes(res, t, c){
       if (th) tc.ignore = true;
       else if (pv && pv.f != null) tc.f = pv.f;
       else if (spans.some(sp => tc.x > sp[0] && tc.x < sp[1])) tc.ignore = !(pv && pv.snd);
+      // Confirmação pelas mãos: um toque sem nenhuma ponta de dedo perto da mesa (mãos no ar, roupa, palma) não é nota.
+      // Um dedo que já estava a tocar continua até levantar.
+      else if (S.gate && H.hands.length) tc.ignore = !(pv && pv.snd && pv.locked);
     }
     res.touches = res.touches.filter(tc => !tc.ignore);
     // pontas no ar: só as que estão perto de uma ponta reconhecida (corta pontos falsos de cor parecida com pele)
@@ -543,7 +552,30 @@ function noteOff(midi){
   if (TEST.on) TEST.ev.push(['off', +(performance.now()/1000 - TEST.t0).toFixed(3), midi]); if (audioReady){ try { sampler.triggerRelease(Tone.Frequency(midi, 'midi').toNote(), Tone.now()); } catch(e){} } }
 
 // ---------- mãos em segundo plano (MediaPipe num worker: nunca atrasa a câmara) ----------
-const hands = { w:null, busy:false, ready:false, res:null, ms:0, err:'', lastSend:0 };
+const hands = { w:null, busy:false, ready:false, res:null, ms:0, err:'', lastSend:0, main:null, mainMs:0, where:'fundo', nRes:0, tried:false };
+const MP_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14', MP_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+// No fio principal com a placa gráfica (WebGL) costuma ser muito mais rápido do que no worker (onde muitos Android caem para o processador).
+async function handsMainTry(){
+  if (hands.tried) return; hands.tried = true;
+  try {
+    const mod = await import(MP_BASE + '/vision_bundle.mjs'), fs = await mod.FilesetResolver.forVisionTasks(MP_BASE + '/wasm');
+    const lm = await mod.HandLandmarker.createFromOptions(fs, { baseOptions:{ modelAssetPath:MP_MODEL, delegate:'GPU' }, runningMode:'VIDEO', numHands:2,
+      minHandDetectionConfidence:0.35, minHandPresenceConfidence:0.35, minTrackingConfidence:0.35 });
+    // mede 6 vezes; fica com o fio principal só se for claramente mais rápido
+    let tot = 0, last = 0; for (let k = 0; k < 6; k++){ await new Promise(r => setTimeout(r, 60)); const a = performance.now(); lm.detectForVideo(vid, Math.max(++last, Math.round(performance.now()))); tot += performance.now() - a; }
+    const ms = tot/6;
+    if (ms < 45 && ms < 0.7*hands.ms){ hands.main = lm; hands.mainMs = ms; hands.where = 'gpu'; if (hands.w){ hands.w.terminate(); hands.w = null; } hands.ready = true; hands.err = ''; }
+    else { try { lm.close(); } catch(e){} }
+  } catch(e){}
+}
+let mpTs = 0;
+function handsMainRun(t){
+  if (!hands.main || !S.hands || t - hands.lastSend < Math.max(0.07, 1.5*hands.mainMs/1000)) return;
+  hands.lastSend = t; const a = performance.now();
+  try { const ts = Math.max(mpTs + 1, Math.round(a)); mpTs = ts; const r = hands.main.detectForVideo(vid, ts);
+    hands.res = { t, hands:(r.landmarks || []).map(l => l.map(p => [p.x*RZW, p.y*rz.H])) }; } catch(e){}
+  hands.mainMs = 0.8*hands.mainMs + 0.2*(performance.now() - a); hands.ms = hands.mainMs;
+}
 function handsStart(){
   if (hands.w || !S.hands || typeof Worker === 'undefined' || typeof createImageBitmap === 'undefined') return;
   try { hands.w = new Worker('maos.js'); } catch(e){ hands.err = 'sem worker'; return; }
@@ -552,16 +584,18 @@ function handsStart(){
     if (d.type === 'ready'){ hands.ready = true; hands.err = ''; hands.dev = d.delegate; }
     else if (d.type === 'error'){ hands.err = d.msg || 'erro'; hands.ready = false; }
     else if (d.type === 'res'){
-      hands.busy = false; hands.ms = 0.8*hands.ms + 0.2*d.ms;
+      hands.busy = false; hands.ms = hands.nRes++ ? 0.8*hands.ms + 0.2*d.ms : d.ms;
+      if (hands.nRes === 8 && (hands.ms > 50 || hands.dev === 'CPU')) handsMainTry();
       // coordenadas normalizadas → px de análise
       hands.res = { t:d.t, hands:(d.hands || []).map(h => h.map(p => [p[0]*RZW, p[1]*rz.H])) };
     }
   };
   hands.w.onerror = () => { hands.err = 'falhou'; hands.busy = false; };
 }
-function handsStop(){ if (hands.w){ hands.w.terminate(); hands.w = null; } hands.ready = false; hands.busy = false; hands.res = null; }
+function handsStop(){ if (hands.w){ hands.w.terminate(); hands.w = null; } if (hands.main){ try { hands.main.close(); } catch(e){} hands.main = null; } hands.ready = false; hands.busy = false; hands.res = null; hands.tried = false; hands.nRes = 0; hands.where = 'fundo'; }
 function handsFeed(t){
-  if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < Math.max(0.3, 2*hands.ms/1000)) return;
+  if (hands.main){ handsMainRun(t); return; }
+  if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < Math.max(0.2, 1.6*hands.ms/1000)) return;
   hands.busy = true; hands.lastSend = t;
   createImageBitmap(vid, { resizeWidth:640, resizeHeight:Math.round(640*vid.videoHeight/vid.videoWidth), resizeQuality:'low' }).then(bmp => { if (!hands.w){ bmp.close(); return; } hands.w.postMessage({ bmp, ts:Math.round(t*1000), t }, [bmp]); })
     .catch(() => { hands.busy = false; });
@@ -615,7 +649,7 @@ function calFrame(CY){
     return;
   }
   // com as mãos: dedo = o que mudou em relação à imagem sem mãos (qualquer cor de pele, qualquer roupa)
-  if (C.bgC){ for (let i = 0; i < n; i++){ const d = CY.C[i] - C.bgC[i]; m[i] = (Math.abs(d) > 7 || CY.Y[i] - C.bgY[i] > 22) ? 1 : 0; } }
+  if (C.bgC && S.detMode !== 'skin'){ for (let i = 0; i < n; i++){ const d = CY.C[i] - C.bgC[i]; m[i] = (Math.abs(d) > 7 || CY.Y[i] - C.bgY[i] > 22) ? 1 : 0; } }
   else for (let i = 0; i < n; i++) m[i] = (CY.C[i] > thr && CY.Y[i] > 18 && !(bgm && bgm[i])) ? 1 : 0;
   for (let i = 0; i < RZW*Math.round(rz.H*0.3); i++) m[i] = 0;
   const yl = rzLowest(m, RZW, rz.H);
@@ -656,7 +690,7 @@ function calEnd(phase){
     store.cal = { a:ln.a, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr, flip:!!(old && old.flip), vw:vid.videoWidth, vh:vid.videoHeight, camKey:camKey(), rd:RD.mode || '', det:'skin' };
     S.lineOff = 0; $('line').value = 0;
     // Modelo da mesa: borda de trás da mesa (horizonte) em cada coluna e quanta mesa se vê atrás das pontas dos dedos.
-    if (C.bgC){
+    if (C.bgC && S.detMode !== 'skin'){
       const hz = new Int16Array(RZW), tc = [], strips = [];
       for (let x = 0; x < RZW; x++){
         const L = Math.round(ln.a*x + ln.b), ref = [], refY = [];
@@ -1012,7 +1046,7 @@ function onFrame(){
 function schedule(){ if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) vid.requestVideoFrameCallback(onFrame); else requestAnimationFrame(onFrame); }
 function statUpdate(){
   const tr = stream && stream.getVideoTracks()[0], st = tr && tr.getSettings ? tr.getSettings() : {};
-  const hm = !S.hands ? 'mãos off' : (hands.err ? 'mãos: ' + hands.err : (hands.ready ? `mãos ${hands.ms.toFixed(0)} ms` : 'mãos a carregar'));
+  const hm = !S.hands ? 'mãos off' : (hands.err ? 'mãos: ' + hands.err : (hands.ready ? `mãos ${hands.ms.toFixed(0)} ms ${hands.main ? 'gpu' : (hands.dev === 'GPU' ? 'gpu·fundo' : 'cpu·fundo')}` : 'mãos a carregar'));
   $('stat').textContent = `${APP_VER} · ${perf.fps}/${perf.camFps} FPS · ${perf.ms.toFixed(1)} ms (imagem ${RD.ms.toFixed(1)} ${RD.mode || '…'}) · ${hm}${audioReady ? '' : ' · som a carregar'}`;
   $('ver').textContent = `${APP_VER} · câmara ${vid.videoWidth}×${vid.videoHeight} a ${st.frameRate ? Math.round(st.frameRate) : '?'} fps`;
 }
@@ -1024,6 +1058,7 @@ const CAMS = { wide:{ width:1280, height:960 }, hd:{ width:1280, height:720 }, s
 if (S.camV !== 2){ S.camV = 2; if (S.cam === 'wide') S.cam = 'hd'; }
 if (S.handsV !== 2){ S.handsV = 2; S.hands = false; }
 if (S.detV !== 1){ S.detV = 1; if (S.tauMm <= 2) S.tauMm = 2.5; }
+if (S.detV2 !== 1){ S.detV2 = 1; S.detMode = 'skin'; S.hands = true; S.gate = true; }
 async function openCam(){
   const sz = CAMS[S.cam] || CAMS.wide, dev = S.camId ? { deviceId:{ exact:S.camId } } : { facingMode:'user' };
   const tries = [
