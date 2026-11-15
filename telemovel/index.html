@@ -114,7 +114,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-12';
+const APP_VER = 'tel-13';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -214,7 +214,7 @@ function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
 
 // ---------- definições ----------
 const KEY = 'pianoDigital.tel.v1';
-const DEF = { detV2:1, gate:true, detMode:'skin', blackFwd:15, detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
+const DEF = { detV2:1, strikeMm:4, tipDy:1.6, strike:true, gate:true, detMode:'skin', blackFwd:15, detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
 let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
 const S = Object.assign({}, DEF, store.S || {});
 const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
@@ -350,7 +350,7 @@ function processFrame(t, R, CY){
   for (const tc of res.touches){
     let pv = null, bd = 0.6*c.wr; for (const q of rz.prev){ const d = Math.abs(q.x - tc.x); if (d < bd){ bd = d; pv = q; } }
     tc.xs = pv ? follow(pv.xs, tc.x, 0.35*c.wr) : tc.x; tc.pens = pv ? follow(pv.pens, tc.pen, 4) : tc.pen;
-    if (pv){ tc.snd = pv.snd; tc.vel = pv.vel; tc.f = pv.f; continue; }
+    if (pv){ tc.snd = pv.snd; tc.vel = pv.vel; tc.f = pv.f; tc.t0 = pv.t0; continue; }
     let best = 0, tb = t;
     for (const fr of rz.hist){
       if (fr.t >= t || t - fr.t > 0.25) continue;
@@ -358,7 +358,17 @@ function processFrame(t, R, CY){
       g = Math.min(g, 60); if (g > best){ best = g; tb = fr.t; }
     }
     const speed = (best/pxmm)/Math.max(t - tb, 1/60);
-    tc.snd = true; tc.vel = clamp(0.3 + speed/500, 0.3, 1);
+    // Só toca quando o dedo BATE (vinha de cima, ≥ 3 mm nos últimos 0,25 s). Dedos pousados, a deslizar ou a palma não tocam,
+    // tal como num piano: pousar a mão nas teclas não faz som.
+    tc.snd = !S.strike || best >= (S.strikeMm || 3)*pxmm; tc.vel = clamp(0.3 + speed/500, 0.3, 1); tc.t0 = t;
+  }
+  // mão inteira a pousar de uma vez (4+ dedos a bater juntos na mesma mão): é pousar a mão, não um acorde
+  if (S.strike){
+    const fresh = res.touches.filter(tc => tc.snd && tc.t0 != null && t - tc.t0 < 0.1);
+    for (const tc of fresh){
+      const grp = fresh.filter(q => Math.abs(q.x - tc.x) < 5*c.wr);
+      if (grp.length >= 4) for (const q of grp) q.snd = false;
+    }
   }
   const used = new Set();
   for (const hv of res.hovers){
@@ -392,8 +402,44 @@ function processFrame(t, R, CY){
         const cx = x1 + w*(k + 0.5)/n; if (res.touches.some(tc => Math.abs(tc.x - cx) < 0.6*c.wr)) continue;
         let g = 999; for (let q = Math.floor(x1 + w*k/n); q < x1 + w*(k + 1)/n; q++) g = Math.min(g, gap[q]);
         const pv = rz.prev.find(q => q.land && Math.abs(q.x - cx) < 0.6*c.wr);
-        res.touches.push({ x:cx, w:w/n, pen:-g, xs:pv ? follow(pv.xs, cx, 0.35*c.wr) : cx, pens:-g, snd:true, vel:pv ? pv.vel : 0.6, land:true });
+        res.touches.push({ x:cx, w:w/n, pen:-g, xs:pv ? follow(pv.xs, cx, 0.35*c.wr) : cx, pens:-g, snd:pv ? pv.snd : true, vel:pv ? pv.vel : 0.6, land:true, t0:pv ? pv.t0 : t });
       }
+    }
+  }
+  // ---------- MODO PELAS PONTAS (com o reconhecimento das mãos) ----------
+  // Só as pontas dos dedos reconhecidas podem tocar: palma, pulso, mangas e mãos no ar nunca tocam.
+  // Cada ponta tem a sua faixa de colunas (até meio caminho da ponta vizinha), por isso um dedo pousado não "engole" o vizinho que bate.
+  // O contacto mede-se na imagem atual (30 por segundo); o reconhecimento só diz ONDE estão os dedos.
+  rz.tipMode = false;
+  { const HT = (S.gate && S.hands && hands.nOk > 2 && hands.res && t - hands.res.t < 1.0) ? hands.res : null;
+    if (HT && HT.hands.length){
+      rz.tipMode = true;
+      const LF = rz.landF, hs = HT.hands.map((p, i) => [p, i]).sort((a, b) => a[0][0][0] - b[0][0][0]), tl = [];
+      hs.forEach(([pts, hi0], hi) => { for (let f = 0; f < 5; f++){ const q = pts[[4,8,12,16,20][f]], dy = ly(q[0]) - q[1];
+        if (dy < (S.tipDy || 1.6)*c.wr && dy > -1.5*c.wr) tl.push({ x:q[0], y:q[1], f, hi:hi0, id:hi*5 + f, ex:f === 0 ? Math.abs(pts[3][0] - q[0]) : 0 }); } });
+      tl.sort((a, b) => a.x - b.x);
+      const out = [];
+      tl.forEach((tp, k) => {
+        let lo = tp.x - 0.6*c.wr - tp.ex*0.25, hi = tp.x + 0.6*c.wr + tp.ex*0.25;
+        if (k > 0) lo = Math.max(lo, (tl[k-1].x + tp.x)/2); if (k < tl.length - 1) hi = Math.min(hi, (tl[k+1].x + tp.x)/2);
+        const a = Math.max(0, Math.round(lo)), b = Math.min(RZW - 1, Math.round(hi)); if (b < a) return;
+        let g = 999, gx = tp.x, landed = false;
+        for (let x = a; x <= b; x++){ if (gap[x] < g){ g = gap[x]; gx = x; } if (LF && LF[x] < 900) landed = true; }
+        const pv = rz.prev.find(q => q.id === tp.id && Math.abs(q.x - gx) < 1.2*c.wr);
+        if (!(g <= (pv ? tauOff : tauOn) || landed)) return;
+        const tc = { x:gx, w:b - a + 1, pen:-g, id:tp.id, f:tp.f, tp, tipT:t, land:landed };
+        if (pv){ tc.xs = follow(pv.xs, gx, 0.35*c.wr); tc.pens = follow(pv.pens, -g, 4); tc.snd = pv.snd; tc.vel = pv.vel; tc.t0 = pv.t0; }
+        else {
+          let best = 0, tb = t;
+          for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.25) continue; let m = 999; for (let x = a; x <= b; x++) m = Math.min(m, fr.gap[x]); m = Math.min(m, 60); if (m > best){ best = m; tb = fr.t; } }
+          tc.xs = gx; tc.pens = -g; tc.t0 = t;
+          tc.snd = !S.strike || best >= (S.strikeMm || 3)*pxmm; tc.vel = clamp(0.3 + ((best/pxmm)/Math.max(t - tb, 1/60))/500, 0.3, 1);
+        }
+        out.push(tc);
+      });
+      if (S.strike){ const fresh = out.filter(q => q.snd && t - q.t0 < 0.1);
+        for (const hi of new Set(fresh.map(q => q.tp.hi))){ const grp = fresh.filter(q => q.tp.hi === hi); if (grp.length >= 4) for (const q of grp) q.snd = false; } }
+      res.touches = out;
     }
   }
   res.hovers = rz.tracks.filter(tr => tr.age >= 2 && !(rz.landF && rz.landF[Math.round(clamp(tr.x, 0, RZW - 1))] < 900));
@@ -451,8 +497,9 @@ function toKey(x, pen){
 }
 function toNotes(res, t, c){
   // mãos reconhecidas (em segundo plano): dedo de cada toque e palma/pulso fora
-  const H = hands.res && t - hands.res.t < 0.7 ? hands.res : null, tips = [], spans = [];
-  if (H && H.hands.length) hands.seenT = t;
+  // último reconhecimento das mãos (pode ter algum atraso); "gate": só toca o que tiver uma ponta de dedo reconhecida perto
+  const H = hands.res && t - hands.res.t < 1.0 ? hands.res : null, tips = [], spans = [];
+  const gate = !!(S.gate && S.hands && H && hands.nOk > 2);
   rz.tipTouch = null;
   if (H) H.hands.forEach((pts, hi) => {
     let x1 = 1e9, x2 = -1e9; for (const q of pts){ x1 = Math.min(x1, q[0]); x2 = Math.max(x2, q[0]); }
@@ -465,14 +512,12 @@ function toNotes(res, t, c){
       tips.push({ x:q[0], y:q[1], f, hi, x0:Math.min(...xs), x1:Math.max(...xs), yLow:Math.max(...ys), used:false });
     }
   });
-  if (!tips.length && S.gate && S.hands && hands.ready && t - (hands.seenT || -9) < 0.5 && H){
-    // as mãos foram vistas há pouco mas agora não há nenhuma ponta: nada pode tocar (exceto dedos que já estavam a tocar)
-    res.touches = res.touches.filter(tc => { const pv = rz.prev.find(q => Math.abs(q.x - tc.x) < 0.6*c.wr); return pv && pv.snd && pv.locked; });
-  }
-  if (tips.length){
+  if (gate && !tips.length) res.touches = [];   // sem mãos à vista: nada toca
+  if (rz.tipMode) rz.tipTouch = new Set(res.touches.filter(tc => tc.snd).map(tc => tc.tp.hi + ':' + tc.tp.f));
+  else if (tips.length){
     const dist = (tp, x) => x < tp.x0 ? tp.x0 - x : (x > tp.x1 ? x - tp.x1 : 0);
     // ponta "perto da mesa": margem larga porque o reconhecimento das mãos chega com algum atraso (o dedo pode ainda estar a descer)
-    const near = tp => tp.f === 0 ? Math.abs(tp.yLow - ly((tp.x0 + tp.x1)/2)) < 3.5*c.wr : Math.abs(tp.y - ly(tp.x)) < 3.5*c.wr;
+    const NV = (S.nearK || 1.4)*c.wr, near = tp => tp.f === 0 ? Math.abs(tp.yLow - ly((tp.x0 + tp.x1)/2)) < NV + 0.5*c.wr : Math.abs(tp.y - ly(tp.x)) < NV;
     // cada toque fica com o dedo mais próximo; os polegares aceitam um pouco mais de distância (tocam de lado)
     const pairs = [];
     res.touches.forEach((tc, k) => { for (const tp of tips){ if (!near(tp)) continue; const d = dist(tp, tc.x), lim = (tp.f === 0 ? 1.3 : 0.9)*c.wr; if (d < lim) pairs.push({ k, tp, d: d - (tp.f === 0 ? 0.2*c.wr : 0) }); } });
@@ -486,19 +531,23 @@ function toNotes(res, t, c){
       // pedaço do mesmo polegar (um polegar deitado pode aparecer como dois toques): não é outra nota
       const th = tips.find(tp => tp.f === 0 && tp.used && dist(tp, tc.x) < 1.3*c.wr);
       if (th) tc.ignore = true;
+      else if (gate){
+        // Confirmação pelas mãos: sem ponta de dedo perto (mãos no ar, pulso, palma, roupa) não é nota.
+        // Um dedo que estava a tocar aguenta um pouco (o reconhecimento pode falhar uma imagem), mas não para sempre.
+        if (pv && pv.tipT != null && t - pv.tipT < 0.45){ tc.f = pv.f; tc.tipT = pv.tipT; }
+        else tc.ignore = true;
+      }
       else if (pv && pv.f != null) tc.f = pv.f;
       else if (spans.some(sp => tc.x > sp[0] && tc.x < sp[1])) tc.ignore = !(pv && pv.snd);
-      // Confirmação pelas mãos: um toque sem nenhuma ponta de dedo perto da mesa (mãos no ar, roupa, palma) não é nota.
-      // Um dedo que já estava a tocar continua até levantar.
-      else if (S.gate && H.hands.length) tc.ignore = !(pv && pv.snd && pv.locked);
     }
+    for (const tc of res.touches) if (tc.tp) tc.tipT = t;
     res.touches = res.touches.filter(tc => !tc.ignore);
     // pontas no ar: só as que estão perto de uma ponta reconhecida (corta pontos falsos de cor parecida com pele)
     res.hovers = res.hovers.filter(hv => tips.some(tp => dist(tp, hv.x) < 1.2*c.wr));
   }
   const now = new Map();
   for (const tc of res.touches){
-    const pv = rz.prev.find(p => Math.abs(p.x - tc.x) < 0.5*c.wr);
+    const pv = tc.id != null ? rz.prev.find(p => p.id === tc.id) : rz.prev.find(p => Math.abs(p.x - tc.x) < 0.5*c.wr);
     const k = toKey(tc.xs, tc.pens);
     tc.age = pv ? (pv.age || 1) + 1 : 1; tc.w = k.w;
     // mão: lado da divisão (a meio das mãos na calibração); um dedo que já estava pousado fica com a mão que tinha
@@ -523,6 +572,7 @@ function toNotes(res, t, c){
     if (t - t0 >= 0.07){ rz.missT.delete(midi); rz.active.delete(midi); rz.offT.set(midi, t); noteOff(midi); }
   }
   rz.prev = res.touches; rz.touches = res.touches; rz.hovers = res.hovers;
+  if (TEST.on && hands.res && hands.res !== TEST.lastH){ TEST.lastH = hands.res; (TEST.hd = TEST.hd || []).push([+(hands.res.t - TEST.t0).toFixed(3), hands.res.hands.map(h => [0,3,4,8,12,16,20].map(j => [Math.round(h[j][0]), Math.round(h[j][1])]))]); }
   if (TEST.on) TEST.fr.push([+(t - TEST.t0).toFixed(3), res.touches.map(q => [Math.round(q.xs), +q.pens.toFixed(1), q.base ?? null, q.black ? 1 : 0, q.locked ? 1 : 0, q.land ? 1 : 0, q.midi ?? null]), res.hovers.map(h => [Math.round(h.x), +h.gap.toFixed(1)])]);
 }
 
@@ -552,7 +602,7 @@ function noteOff(midi){
   if (TEST.on) TEST.ev.push(['off', +(performance.now()/1000 - TEST.t0).toFixed(3), midi]); if (audioReady){ try { sampler.triggerRelease(Tone.Frequency(midi, 'midi').toNote(), Tone.now()); } catch(e){} } }
 
 // ---------- mãos em segundo plano (MediaPipe num worker: nunca atrasa a câmara) ----------
-const hands = { w:null, busy:false, ready:false, res:null, ms:0, err:'', lastSend:0, main:null, mainMs:0, where:'fundo', nRes:0, tried:false };
+const hands = { w:null, busy:false, ready:false, res:null, ms:0, err:'', lastSend:0, main:null, mainMs:0, where:'fundo', nRes:0, tried:false, nOk:0 };
 const MP_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14', MP_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 // No fio principal com a placa gráfica (WebGL) costuma ser muito mais rápido do que no worker (onde muitos Android caem para o processador).
 async function handsMainTry(){
@@ -573,7 +623,7 @@ function handsMainRun(t){
   if (!hands.main || !S.hands || t - hands.lastSend < Math.max(0.07, 1.5*hands.mainMs/1000)) return;
   hands.lastSend = t; const a = performance.now();
   try { const ts = Math.max(mpTs + 1, Math.round(a)); mpTs = ts; const r = hands.main.detectForVideo(vid, ts);
-    hands.res = { t, hands:(r.landmarks || []).map(l => l.map(p => [p.x*RZW, p.y*rz.H])) }; } catch(e){}
+    hands.nOk++; hands.res = { t, hands:(r.landmarks || []).map(l => l.map(p => [p.x*RZW, p.y*rz.H])) }; } catch(e){}
   hands.mainMs = 0.8*hands.mainMs + 0.2*(performance.now() - a); hands.ms = hands.mainMs;
 }
 function handsStart(){
@@ -587,12 +637,13 @@ function handsStart(){
       hands.busy = false; hands.ms = hands.nRes++ ? 0.8*hands.ms + 0.2*d.ms : d.ms;
       if (hands.nRes === 8 && (hands.ms > 50 || hands.dev === 'CPU')) handsMainTry();
       // coordenadas normalizadas → px de análise
+      hands.nOk++; if (d.delegate) hands.dev = d.delegate;
       hands.res = { t:d.t, hands:(d.hands || []).map(h => h.map(p => [p[0]*RZW, p[1]*rz.H])) };
     }
   };
   hands.w.onerror = () => { hands.err = 'falhou'; hands.busy = false; };
 }
-function handsStop(){ if (hands.w){ hands.w.terminate(); hands.w = null; } if (hands.main){ try { hands.main.close(); } catch(e){} hands.main = null; } hands.ready = false; hands.busy = false; hands.res = null; hands.tried = false; hands.nRes = 0; hands.where = 'fundo'; }
+function handsStop(){ if (hands.w){ hands.w.terminate(); hands.w = null; } if (hands.main){ try { hands.main.close(); } catch(e){} hands.main = null; } hands.ready = false; hands.busy = false; hands.res = null; hands.tried = false; hands.nRes = 0; hands.nOk = 0; hands.where = 'fundo'; }
 function handsFeed(t){
   if (hands.main){ handsMainRun(t); return; }
   if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < Math.max(0.2, 1.6*hands.ms/1000)) return;
@@ -903,7 +954,7 @@ async function testStart(){
   const offs = [S.offL, S.offR]; S.offL = 0; S.offR = 0; renderOff();
   let mime = ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm', 'video/mp4'].find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
   try { TEST.rec = new MediaRecorder(stream, mime ? { mimeType:mime, videoBitsPerSecond:3000000 } : {}); } catch(e){ banner('Este telemóvel não deixa gravar vídeo aqui.', 3000); return; }
-  Object.assign(TEST, { ev:[], fr:[], pr:[], cur:null, chunks:[], mime:TEST.rec.mimeType || mime || '' });
+  Object.assign(TEST, { ev:[], fr:[], hd:[], lastH:null, pr:[], cur:null, chunks:[], mime:TEST.rec.mimeType || mime || '' });
   TEST.rec.ondataavailable = e => { if (e.data && e.data.size) TEST.chunks.push(e.data); };
   TEST.rec.onstart = () => { TEST.t0 = performance.now()/1000; TEST.on = true; };
   TEST.rec.start(1000);
@@ -928,7 +979,8 @@ function testEnd(plan, offs){
     });
     const tr = stream.getVideoTracks()[0], st = tr.getSettings ? tr.getSettings() : {};
     const log = { ver:APP_VER, date:new Date().toISOString(), ua:navigator.userAgent, video:[vid.videoWidth, vid.videoHeight], camFps:st.frameRate || null, rd:RD.mode, RZW, H:rz.H,
-      cal:store.cal, S:{ tauMm:S.tauMm, keyScale:S.keyScale, blackMode:S.blackMode, blackHalf:S.blackHalf, blackFwd:S.blackFwd, center:S.center, cam:S.cam }, mime:TEST.mime,
+      cal:store.cal, S:{ tauMm:S.tauMm, keyScale:S.keyScale, blackMode:S.blackMode, blackHalf:S.blackHalf, blackFwd:S.blackFwd, center:S.center, cam:S.cam, detMode:S.detMode, hands:S.hands, gate:S.gate, strike:S.strike, strikeMm:S.strikeMm, tipDy:S.tipDy },
+      handsInfo:{ ms:hands.ms, dev:hands.dev, main:!!hands.main, nOk:hands.nOk, err:hands.err }, hd:TEST.hd, mime:TEST.mime,
       prompts:TEST.pr, events:TEST.ev, frames:TEST.fr, summary:{ ok, total:TEST.pr.length, items:res } };
     const ext = /mp4/.test(TEST.mime) ? 'mp4' : 'webm';
     dl(new Blob(TEST.chunks, { type:TEST.mime || 'video/webm' }), `piano-teste.${ext}`);
@@ -1058,6 +1110,7 @@ const CAMS = { wide:{ width:1280, height:960 }, hd:{ width:1280, height:720 }, s
 if (S.camV !== 2){ S.camV = 2; if (S.cam === 'wide') S.cam = 'hd'; }
 if (S.handsV !== 2){ S.handsV = 2; S.hands = false; }
 if (S.detV !== 1){ S.detV = 1; if (S.tauMm <= 2) S.tauMm = 2.5; }
+if (S.strike == null) S.strike = true;
 if (S.detV2 !== 1){ S.detV2 = 1; S.detMode = 'skin'; S.hands = true; S.gate = true; }
 async function openCam(){
   const sz = CAMS[S.cam] || CAMS.wide, dev = S.camId ? { deviceId:{ exact:S.camId } } : { facingMode:'user' };
