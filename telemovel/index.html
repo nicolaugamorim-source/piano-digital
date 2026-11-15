@@ -95,6 +95,8 @@ body{background:#000}
   <label>Câmara</label>
   <div class="row" id="camSz"><button class="btn" data-v="wide">Larga (4:3)</button><button class="btn" data-v="hd">16:9</button><button class="btn" data-v="small">Pequena (rápida)</button></div>
   <div class="row" id="camList" style="margin-top:6px"></div>
+  <label>Marcas nos dedos</label>
+  <div class="row" id="skl"><button class="btn" data-v="1">Mão completa (pontas e articulações)</button><button class="btn" data-v="0">Só as pontas</button></div>
   <label>Volume: <b id="volV"></b></label>
   <input type="range" id="vol" min="-30" max="6" step="1">
   <label>Ferramentas</label>
@@ -109,7 +111,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-3';
+const APP_VER = 'tel-4';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -209,7 +211,7 @@ function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
 
 // ---------- definições ----------
 const KEY = 'pianoDigital.tel.v1';
-const DEF = { offL:0, offR:0, speed:0.8, autoOct:true, cam:'wide', camId:'', tauMm:2, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
+const DEF = { skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'wide', camId:'', tauMm:2, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
 let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
 const S = Object.assign({}, DEF, store.S || {});
 const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
@@ -221,6 +223,7 @@ const SOLF = ['Dó','Dó♯','Ré','Ré♯','Mi','Fá','Fá♯','Sol','Sol♯','
 const noteName = m => (S.labels === 'letters' ? LET : SOLF)[m % 12] + (Math.floor(m/12) - 1);
 const hasBlackAfter = m => [0,2,5,7,9].includes(m % 12);
 const KW = 23.5, FOV = 72;
+const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
 
 // ---------- câmara e processamento ----------
 const RZW = 640;                     // largura de análise (px)
@@ -322,6 +325,7 @@ function toKey(x, pen){
 function toNotes(res, t, c){
   // mãos reconhecidas (em segundo plano): dedo de cada toque e palma/pulso fora
   const H = hands.res && t - hands.res.t < 0.35 ? hands.res : null, tips = [], spans = [];
+  rz.tipTouch = null;
   if (H) H.hands.forEach((pts, hi) => {
     let x1 = 1e9, x2 = -1e9; for (const q of pts){ x1 = Math.min(x1, q[0]); x2 = Math.max(x2, q[0]); }
     spans.push([x1 - 0.3*c.wr, x2 + 0.3*c.wr]);
@@ -342,6 +346,7 @@ function toNotes(res, t, c){
     pairs.sort((p, q) => p.d - q.d);
     const done = new Set();
     for (const pr of pairs){ if (done.has(pr.k) || pr.tp.used) continue; pr.tp.used = true; done.add(pr.k); res.touches[pr.k].f = pr.tp.f; res.touches[pr.k].tp = pr.tp; }
+    rz.tipTouch = new Set(res.touches.filter(tc => tc.tp && tc.snd).map(tc => tc.tp.hi + ':' + tc.tp.f));
     for (const tc of res.touches){
       if (tc.tp) continue;
       const pv = rz.prev.find(q => Math.abs(q.x - tc.x) < 0.6*c.wr);
@@ -432,6 +437,15 @@ function handsFeed(t){
 // ---------- calibração (4 passos) ----------
 let msgTimer = null;
 function banner(txt, ms){ const b = $('msg'); b.textContent = txt; b.style.display = txt ? 'block' : 'none'; clearTimeout(msgTimer); if (ms) msgTimer = setTimeout(() => { b.style.display = 'none'; }, ms); }
+// Exposição, cor e foco sempre automáticos. (Fixá-los em "manual" escurecia a imagem em muitos Android.)
+async function camAuto(){
+  try {
+    const tr = stream && stream.getVideoTracks()[0]; if (!tr || !tr.getCapabilities) return;
+    const cap = tr.getCapabilities(), adv = {};
+    for (const k of ['exposureMode','whiteBalanceMode','focusMode']) if (cap[k] && cap[k].includes('continuous')) adv[k] = 'continuous';
+    if (Object.keys(adv).length) await tr.applyConstraints({ advanced:[adv] });
+  } catch(e){}
+}
 async function camLock(on){
   try {
     const tr = stream && stream.getVideoTracks()[0]; if (!tr || !tr.getCapabilities) return;
@@ -450,7 +464,6 @@ function startCal(){
     C.timers.push(setTimeout(() => { C.phase = phase; C.n = 0; C.cnt = new Uint16Array(RZW*rz.H); C.cols = Array.from({length:RZW}, () => []); banner('Não mexas…'); }, t0 + 4000));
     C.timers.push(setTimeout(() => calEnd(phase), t0 + 5200));
   };
-  camLock(false); C.timers.push(setTimeout(() => camLock(true), 5600 + 2800));
   seq('bg', 'Passo 1/4 · Tira as mãos da frente da câmara', 0);
   seq('white', 'Passo 2/4 · Pousa as PONTAS dos dedos das duas mãos na mesa, onde queres tocar', 5600);
   seq('side', 'Passo 3/4 · Tira a mão DIREITA (põe-na no colo) e deixa a ESQUERDA pousada', 11200);
@@ -710,8 +723,25 @@ function draw(){
     g.textAlign = 'center'; g.fillText('esq. ' + (S.offL > 0 ? '+' : '') + S.offL, lx, PY - 4); g.fillText('dir. ' + (S.offR > 0 ? '+' : '') + S.offR, rx, PY - 4); }
   // pontas dos dedos: anel verde-água; cheio quando está a tocar
   g.lineWidth = 2.5; g.strokeStyle = AQ; g.fillStyle = AQ;
-  for (const h of rz.hovers){ const p = toScr(h.x, ly(h.x) - h.gap); g.beginPath(); g.arc(p[0], p[1], 9, 0, Math.PI*2); g.stroke(); }
-  for (const q of rz.touches){ const p = toScr(q.xs, ly(q.xs) + Math.min(q.pens, 0)); g.beginPath(); g.arc(p[0], p[1], 9, 0, Math.PI*2); g.fill(); g.stroke(); }
+  const HR = hands.res && performance.now()/1000 - hands.res.t < 0.4 && S.skel ? hands.res : null;
+  if (HR){
+    // mão completa (do reconhecimento das mãos): ligações, articulações e pontas; ponta cheia = dedo a tocar
+    if (!hands.disp || hands.disp.length !== HR.hands.length) hands.disp = HR.hands.map(h => h.map(q => q.slice()));
+    HR.hands.forEach((pts, hi) => { const d = hands.disp[hi]; for (let k = 0; k < 21; k++){ d[k][0] += 0.6*(pts[k][0] - d[k][0]); d[k][1] += 0.6*(pts[k][1] - d[k][1]); } });
+    const tt = rz.tipTouch || new Set();
+    hands.disp.forEach((pts, hi) => {
+      const sp = pts.map(q => toScr(q[0], q[1]));
+      g.strokeStyle = 'rgba(44,199,184,0.75)'; g.lineWidth = 2; g.beginPath();
+      for (const [a, b] of HAND_LINKS){ g.moveTo(sp[a][0], sp[a][1]); g.lineTo(sp[b][0], sp[b][1]); }
+      g.stroke();
+      g.fillStyle = '#eafaf7'; for (let k = 0; k < 21; k++) if (![4,8,12,16,20].includes(k)){ g.beginPath(); g.arc(sp[k][0], sp[k][1], 3.5, 0, Math.PI*2); g.fill(); }
+      g.lineWidth = 2.5; g.strokeStyle = AQ; g.fillStyle = AQ;
+      [4,8,12,16,20].forEach((k, f) => { g.beginPath(); g.arc(sp[k][0], sp[k][1], 8, 0, Math.PI*2); if (tt.has(hi + ':' + f)) g.fill(); g.stroke(); });
+    });
+  } else for (const h of rz.hovers){ const p = toScr(h.x, ly(h.x) - h.gap); g.beginPath(); g.arc(p[0], p[1], 9, 0, Math.PI*2); g.stroke(); }
+  for (const q of rz.touches){
+    if (HR && q.tp) continue;          // já está marcado na ponta do dedo reconhecido
+    const p = toScr(q.xs, ly(q.xs) + Math.min(q.pens, 0)); g.beginPath(); g.arc(p[0], p[1], 9, 0, Math.PI*2); g.fill(); g.stroke(); }
   if (S.debug){
     g.fillStyle = '#ff7a6b'; if (rz.yl) for (let x = 0; x < RZW; x += 2) if (rz.yl[x] >= 0){ const p = toScr(x, rz.yl[x] + rz.yTop); g.fillRect(p[0] - 1, p[1] - 1, 2.5, 2.5); }
     if (hands.res && performance.now()/1000 - hands.res.t < 0.5){ g.fillStyle = '#ffd36b'; for (const pts of hands.res.hands) for (const k of [4,8,12,16,20]){ const p = toScr(pts[k][0], pts[k][1]); g.fillRect(p[0] - 3, p[1] - 3, 6, 6); } }
@@ -772,6 +802,7 @@ async function switchCam(){
   if (stream) stream.getTracks().forEach(tr => tr.stop());
   try { stream = await openCam(); } catch(e){ banner('Não consegui abrir esta câmara.', 3000); return; }
   vid.srcObject = stream; try { await vid.play(); } catch(e){}
+  camAuto();
 }
 // calibração feita com outra câmara ou outro tamanho de imagem → deixa de valer
 function calValid(){ const c = store.cal; return !!c && c.vw === vid.videoWidth && c.vh === vid.videoHeight && (c.camKey || '') === camKey(); }
@@ -786,7 +817,7 @@ $('bGo').onclick = async () => {
   try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){}
   $('start').style.display = 'none'; resize(); showUI(); handsStart();
   if (!cal()) banner('Toca em “Calibrar” para começar.', 6000);
-  else camLock(true);
+  camAuto();
   schedule();
 };
 document.addEventListener('visibilitychange', async () => { if (!document.hidden && stream){ try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch(e){} } });
@@ -801,11 +832,11 @@ $('bFlip').onclick = () => { if (cal()){ cal().flip = !cal().flip; save(); relea
 $('line').oninput = e => { S.lineOff = +e.target.value; $('lineV').textContent = S.lineOff; releaseAll(); save(); layout(); };
 $('bSet').onclick = () => { const p = $('pop'); p.style.display = p.style.display === 'block' ? 'none' : 'block'; $('songs').style.display = 'none'; renderPop(); renderCams(); };
 function seg(id, key, conv){ for (const b of $(id).querySelectorAll('button')){ b.onclick = () => { S[key] = conv(b.dataset.v); save(); renderPop(); releaseAll(); if (key === 'hands'){ S.hands ? handsStart() : handsStop(); } }; } }
-seg('blk', 'blackMode', v => v); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1');
+seg('blk', 'blackMode', v => v); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1'); seg('skl', 'skel', v => v === '1');
 function renderPop(){
   $('tau').value = S.tauMm; $('tauV').textContent = S.tauMm + ' mm'; $('ks').value = S.keyScale; $('ksV').textContent = S.keyScale.toFixed(2) + '×';
   $('vol').value = S.volume; $('volV').textContent = S.volume + ' dB';
-  for (const [id, key, f] of [['camSz','cam',v => v], ['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
+  for (const [id, key, f] of [['skl','skel',v => v === '1'], ['camSz','cam',v => v], ['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
   $('bDbg').classList.toggle('on', S.debug);
 }
 for (const b of $('camSz').querySelectorAll('button')) b.onclick = async () => { S.cam = b.dataset.v; save(); renderPop(); await switchCam(); };
