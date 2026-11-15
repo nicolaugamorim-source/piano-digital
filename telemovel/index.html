@@ -93,10 +93,10 @@ body{background:#000}
   <label>Reconhecimento das mãos (em segundo plano)</label>
   <div class="row" id="hnd"><button class="btn" data-v="1">Ligado</button><button class="btn" data-v="0">Desligado</button></div>
   <label>Câmara</label>
-  <div class="row" id="camSz"><button class="btn" data-v="wide">Larga (4:3)</button><button class="btn" data-v="hd">16:9</button><button class="btn" data-v="small">Pequena (rápida)</button></div>
+  <div class="row" id="camSz"><button class="btn" data-v="hd">Normal (16:9)</button><button class="btn" data-v="wide">Mais alta (4:3, mais lenta)</button><button class="btn" data-v="small">Pequena (rápida)</button></div>
   <div class="row" id="camList" style="margin-top:6px"></div>
   <label>Marcas nos dedos</label>
-  <div class="row" id="skl"><button class="btn" data-v="1">Mão completa (pontas e articulações)</button><button class="btn" data-v="0">Só as pontas</button></div>
+  <div class="row" id="skl"><button class="btn" data-v="1">Pontas e articulações</button><button class="btn" data-v="0">Só as pontas</button></div>
   <label>Volume: <b id="volV"></b></label>
   <input type="range" id="vol" min="-30" max="6" step="1">
   <label>Ferramentas</label>
@@ -111,7 +111,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-4';
+const APP_VER = 'tel-5';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -211,7 +211,7 @@ function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
 
 // ---------- definições ----------
 const KEY = 'pianoDigital.tel.v1';
-const DEF = { skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'wide', camId:'', tauMm:2, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
+const DEF = { camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
 let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
 const S = Object.assign({}, DEF, store.S || {});
 const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
@@ -229,14 +229,22 @@ const HAND_LINKS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10]
 const RZW = 640;                     // largura de análise (px)
 const vid = $('vid');
 let stream = null;
+const GR = { mode:null, n:0, t:{ cpu:0, gpu:0 }, c:{ cpu:0, gpu:0 }, ms:0, cv:{}, ctx:{} };
+for (const m of ['cpu', 'gpu']){ GR.cv[m] = document.createElement('canvas'); GR.ctx[m] = GR.cv[m].getContext('2d', m === 'cpu' ? { willReadFrequently:true } : {}); }
+function grabReset(){ GR.mode = null; GR.n = 0; GR.t = { cpu:0, gpu:0 }; GR.c = { cpu:0, gpu:0 }; }
 const rz = { cv:document.createElement('canvas'), ctx:null, H:360, sc:1, bg:null, prev:[], touches:[], hovers:[], active:new Map(), offT:new Map(), missT:new Map(),
   yTop:0, yl:null, calib:null, lastT:0, tracks:[], hist:[], accC:null, accY:null, gapS:null, gap:null };
 rz.ctx = rz.cv.getContext('2d', { willReadFrequently:true });
 function rzSize(){ rz.sc = RZW/(vid.videoWidth || 640); rz.H = Math.round((vid.videoHeight || 360)*rz.sc); }
 function grab(y0, h){
-  if (rz.cv.width !== RZW || rz.cv.height !== h){ rz.cv.width = RZW; rz.cv.height = h; }
-  rz.ctx.drawImage(vid, 0, y0/rz.sc, vid.videoWidth, h/rz.sc, 0, 0, RZW, h);
-  return rz.ctx.getImageData(0, 0, RZW, h).data;
+  // nas primeiras imagens experimenta as duas formas e fica com a mais rápida
+  const use = GR.mode || (GR.n % 20 < 10 ? 'cpu' : 'gpu'), cv = GR.cv[use], cx = GR.ctx[use], a = performance.now();
+  if (cv.width !== RZW || cv.height !== h){ cv.width = RZW; cv.height = h; }
+  cx.drawImage(vid, 0, y0/rz.sc, vid.videoWidth, h/rz.sc, 0, 0, RZW, h);
+  const data = cx.getImageData(0, 0, RZW, h).data, dt = performance.now() - a;
+  GR.ms = 0.9*GR.ms + 0.1*dt;
+  if (!GR.mode){ if (GR.n % 10 >= 3){ GR.t[use] += dt; GR.c[use]++; } if (++GR.n >= 60) GR.mode = GR.t.cpu/GR.c.cpu <= GR.t.gpu/GR.c.gpu ? 'cpu' : 'gpu'; }
+  return data;
 }
 const cal = () => (store.cal && (!vid.videoWidth || calValid())) ? store.cal : null;
 const lineB = () => cal().b0 + S.lineOff;
@@ -428,7 +436,7 @@ function handsStart(){
 }
 function handsStop(){ if (hands.w){ hands.w.terminate(); hands.w = null; } hands.ready = false; hands.busy = false; hands.res = null; }
 function handsFeed(t){
-  if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < 0.05) return;
+  if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < Math.max(0.07, 1.4*hands.ms/1000)) return;
   hands.busy = true; hands.lastSend = t;
   createImageBitmap(vid, { resizeWidth:640, resizeHeight:Math.round(640*vid.videoHeight/vid.videoWidth), resizeQuality:'low' }).then(bmp => { if (!hands.w){ bmp.close(); return; } hands.w.postMessage({ bmp, ts:Math.round(t*1000), t }, [bmp]); })
     .catch(() => { hands.busy = false; });
@@ -498,7 +506,18 @@ function calEnd(phase){
     if (!runs.length) return fail('Não consegui medir os dedos. Repete com os dedos um pouco afastados.');
     const single = runs.filter(w => w <= 60).sort((p,q) => p-q), wr = single.length ? single[single.length>>1] : 24;
     const old = store.cal;
-    store.cal = { a:ln.a, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr:(old && old.thr) || 7, flip:!!(old && old.flip), vw:vid.videoWidth, vh:vid.videoHeight, camKey:camKey() };
+    // Limiar da cor da pele ajustado a esta luz e a esta mesa: a meio entre a pele dos dedos pousados e a mesa logo à frente deles.
+    let thr = (old && old.thr) || 7;
+    { const d = grab(0, rz.H), sk = [], tb = [], cc = i => 0.6687*d[4*i] - 0.0874*d[4*i+1] - 0.5813*d[4*i+2];
+      for (let x = 0; x < RZW; x++){
+        const L = Math.round(ln.a*x + ln.b);
+        if (yl[x] >= 0 && L - yl[x] <= 3) for (let y = L - Math.round(0.5*wr); y <= L - 2; y++) if (y >= 0) sk.push(cc(y*RZW + x));
+        for (let y = L + 4; y < Math.min(rz.H, L + 20); y++) tb.push(cc(y*RZW + x));
+      }
+      const pct = (a, q) => { a.sort((p, r) => p - r); return a[Math.floor(q*(a.length - 1))]; };
+      if (sk.length > 200 && tb.length > 200){ const s15 = pct(sk, 0.15), t97 = pct(tb, 0.97); if (s15 - t97 > 3) thr = clamp((s15 + t97)/2, 4, 18); }
+    }
+    store.cal = { a:ln.a, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr, flip:!!(old && old.flip), vw:vid.videoWidth, vh:vid.videoHeight, camKey:camKey() };
     S.lineOff = 0; $('line').value = 0;
     return;
   }
@@ -678,7 +697,7 @@ function layout(){
   } else L.dy = (SH - vh*s)*0.35;
   Object.assign(vid.style, { width:vw*s + 'px', height:vh*s + 'px', left:L.dx + 'px', top:L.dy + 'px' });
 }
-vid.addEventListener('loadedmetadata', () => { rzSize(); rz.accC = null; layout(); showUI(); if (store.cal && !calValid()) banner('A imagem da câmara mudou: toca em “Calibrar”.', 6000); });
+vid.addEventListener('loadedmetadata', () => { rzSize(); rz.accC = null; grabReset(); layout(); showUI(); if (store.cal && !calValid()) banner('A imagem da câmara mudou: toca em “Calibrar”.', 6000); });
 // px de análise → ecrã (espelhado, como um espelho: a tua mão direita aparece à direita)
 function toScr(x, y){ return [SW - (L.dx + (x/rz.sc)*L.s), L.dy + (y/rz.sc)*L.s]; }
 function draw(){
@@ -731,9 +750,6 @@ function draw(){
     const tt = rz.tipTouch || new Set();
     hands.disp.forEach((pts, hi) => {
       const sp = pts.map(q => toScr(q[0], q[1]));
-      g.strokeStyle = 'rgba(44,199,184,0.75)'; g.lineWidth = 2; g.beginPath();
-      for (const [a, b] of HAND_LINKS){ g.moveTo(sp[a][0], sp[a][1]); g.lineTo(sp[b][0], sp[b][1]); }
-      g.stroke();
       g.fillStyle = '#eafaf7'; for (let k = 0; k < 21; k++) if (![4,8,12,16,20].includes(k)){ g.beginPath(); g.arc(sp[k][0], sp[k][1], 3.5, 0, Math.PI*2); g.fill(); }
       g.lineWidth = 2.5; g.strokeStyle = AQ; g.fillStyle = AQ;
       [4,8,12,16,20].forEach((k, f) => { g.beginPath(); g.arc(sp[k][0], sp[k][1], 8, 0, Math.PI*2); if (tt.has(hi + ':' + f)) g.fill(); g.stroke(); });
@@ -772,7 +788,7 @@ function schedule(){ if ('requestVideoFrameCallback' in HTMLVideoElement.prototy
 function statUpdate(){
   const tr = stream && stream.getVideoTracks()[0], st = tr && tr.getSettings ? tr.getSettings() : {};
   const hm = !S.hands ? 'mãos off' : (hands.err ? 'mãos: ' + hands.err : (hands.ready ? `mãos ${hands.ms.toFixed(0)} ms` : 'mãos a carregar'));
-  $('stat').textContent = `${APP_VER} · ${perf.fps} FPS · ${perf.ms.toFixed(1)} ms · ${hm}${audioReady ? '' : ' · som a carregar'}`;
+  $('stat').textContent = `${APP_VER} · ${perf.fps} FPS · ${perf.ms.toFixed(1)} ms (imagem ${GR.ms.toFixed(1)} ${GR.mode || '…'}) · ${hm}${audioReady ? '' : ' · som a carregar'}`;
   $('ver').textContent = `${APP_VER} · câmara ${vid.videoWidth}×${vid.videoHeight} a ${st.frameRate ? Math.round(st.frameRate) : '?'} fps`;
 }
 
@@ -780,6 +796,7 @@ function statUpdate(){
 // Imagem larga: em muitos Android, resoluções baixas (640×360) são um recorte do centro do sensor (parece zoom).
 // Pede-se a imagem do sensor inteiro (4:3, como o sensor) e reduz-se só para a análise. Zoom no mínimo, se der.
 const CAMS = { wide:{ width:1280, height:960 }, hd:{ width:1280, height:720 }, small:{ width:640, height:360 } };
+if (S.camV !== 2){ S.camV = 2; if (S.cam === 'wide') S.cam = 'hd'; }
 async function openCam(){
   const sz = CAMS[S.cam] || CAMS.wide, dev = S.camId ? { deviceId:{ exact:S.camId } } : { facingMode:'user' };
   const tries = [
