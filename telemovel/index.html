@@ -88,6 +88,8 @@ body{background:#000}
   <input type="range" id="ks" min="0.9" max="2.4" step="0.05">
   <label>Teclas pretas</label>
   <div class="row" id="blk"><button class="btn" data-v="depth">Dedo à frente</button><button class="btn" data-v="lateral">Entre as brancas</button><button class="btn" data-v="off">Desligadas</button></div>
+  <label>Como ver os dedos</label>
+  <div class="row" id="detM"><button class="btn" data-v="auto">Pela mesa (recomendado)</button><button class="btn" data-v="skin">Pela cor da pele</button></div>
   <label>Teclas pretas: avançar pelo menos <b id="bfV"></b> (dedo mais perto do telemóvel)</label>
   <input type="range" id="bf" min="6" max="35" step="1">
   <label>Nomes nas teclas</label>
@@ -106,13 +108,13 @@ body{background:#000}
 </div>
 <div id="start">
   <h1>Piano Digital · Telemóvel</h1>
-  <p>Põe o telemóvel <b>de pé, deitado de lado</b> (ao alto, na horizontal), em cima da mesa e à frente das mãos, com o ecrã virado para ti. A câmara da frente tem de ficar à altura da mesa, a olhar para os teus dedos.</p>
+  <p>Põe o telemóvel <b>de pé, deitado de lado</b> (ao alto, na horizontal), em cima da mesa e à frente das mãos, com o ecrã virado para ti. A câmara da frente tem de ficar à altura da mesa, a olhar para os teus dedos. Toca uns 5 cm à frente da borda de trás da mesa, para haver mesa atrás das pontas dos dedos.</p>
   <button class="btn pri" id="bGo">Começar</button>
   <p id="startErr" style="color:#ff9a8b"></p>
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-10';
+const APP_VER = 'tel-11';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -212,7 +214,7 @@ function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
 
 // ---------- definições ----------
 const KEY = 'pianoDigital.tel.v1';
-const DEF = { blackFwd:15, detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:false, debug:false, volume:-4, lineOff:0 };
+const DEF = { detMode:'auto', blackFwd:15, detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:false, debug:false, volume:-4, lineOff:0 };
 let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
 const S = Object.assign({}, DEF, store.S || {});
 const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
@@ -303,7 +305,8 @@ function releaseAll(){ for (const m of rz.active.keys()) noteOff(m); rz.active.c
 function roi(){
   if (rz.calib) return rz.calib.phase ? { y0:0, h:rz.H } : null;
   if (!cal()) return null;
-  const ya = ly(0), yb = ly(RZW - 1), yTop = Math.max(0, Math.floor(Math.min(ya, yb) - 100)), yBot = Math.min(rz.H, Math.ceil(Math.max(ya, yb) + 24));
+  const ya = ly(0), yb = ly(RZW - 1); let yTop = Math.max(0, Math.floor(Math.min(ya, yb) - 100)); const yBot = Math.min(rz.H, Math.ceil(Math.max(ya, yb) + 24));
+  if (tbOn()){ let hm = rz.H; for (let x = 0; x < RZW; x += 8) hm = Math.min(hm, TB.hz[x]); yTop = Math.max(yTop, hm - 3); }
   return yBot - yTop >= 20 ? { y0:yTop, h:yBot - yTop } : null;
 }
 function processFrame(t, R, CY){
@@ -315,16 +318,21 @@ function processFrame(t, R, CY){
   // ruído no tempo, por píxel: parado → média; mudança a sério → segue logo
   const init = !rz.accC || rz.accC.length !== n || rz.yTop !== yTop;
   if (init){ rz.accC = new Float32Array(n); rz.accY = new Float32Array(n); }
-  const aC = rz.accC, aY = rz.accY;
+  const aC = rz.accC, aY = rz.accY, TBM = tbOn();
   for (let i = 0; i < n; i++){
     const cc = CC[i], yy = YY[i];
     if (init){ aC[i] = cc; aY[i] = yy; }
     else { const k = (Math.abs(cc - aC[i]) > 10 || Math.abs(yy - aY[i]) > 25) ? 1 : 0.3; aC[i] += k*(cc - aC[i]); aY[i] += k*(yy - aY[i]); }
-    m[i] = (aC[i] > c.thr && aY[i] > 18 && !(bg && bg[i])) ? 1 : 0;
+    if (TBM){
+      const x = i % RZW, y = yTop + ((i / RZW) | 0), j = y*RZW + x;
+      m[i] = tbFg(j, x, y, aC[i], aY[i]);
+      // a mesa vai sendo reaprendida onde não há dedo (a luz e a exposição mudam ao longo do tempo)
+      if (!m[i] && y >= TB.hz[x] && TB.C[j] === TB.C[j]){ TB.C[j] += 0.02*(aC[i] - TB.C[j]); TB.Y[j] += 0.02*(aY[i] - TB.Y[j]); }
+    } else m[i] = (aC[i] > c.thr && aY[i] > 18 && !(bg && bg[i])) ? 1 : 0;
   }
   const yl = rzLowestAt(m, RZW, h, x => ly(x) - yTop, 2), raw = new Float32Array(RZW);
-  for (let x = 0; x < RZW; x++){ const y = yl[x]; if (y >= 0 && y + 1 < h){ const cA = aC[y*RZW+x] - c.thr, cB = aC[(y+1)*RZW+x] - c.thr; if (cA > 0 && cB < 0) yl[x] = y + cA/(cA - cB); } }
-  { const minH = 0.4*c.wr, minW = Math.round(0.5*c.wr); let total = 0, run = 0;
+  if (!TBM) for (let x = 0; x < RZW; x++){ const y = yl[x]; if (y >= 0 && y + 1 < h){ const cA = aC[y*RZW+x] - c.thr, cB = aC[(y+1)*RZW+x] - c.thr; if (cA > 0 && cB < 0) yl[x] = y + cA/(cA - cB); } }
+  { const minH = TBM ? Math.max(3, Math.min(0.4*c.wr, 0.5*TB.strip)) : 0.4*c.wr, minW = Math.round(0.5*c.wr); let total = 0, run = 0;
     for (let x = 0; x <= RZW; x++){
       let ok = false;
       if (x < RZW && yl[x] >= 0){ let cnt = 0; for (let y = 0; y < h && cnt < minH; y++) cnt += m[y*RZW+x]; ok = cnt >= minH; if (!ok) yl[x] = -1; }
@@ -391,6 +399,30 @@ function processFrame(t, R, CY){
   res.hovers = rz.tracks.filter(tr => tr.age >= 2 && !(rz.landF && rz.landF[Math.round(clamp(tr.x, 0, RZW - 1))] < 900));
   rz.yl = yl; rz.yTop = yTop; rz.gap = gap;
   toNotes(res, t, c);
+}
+
+// ---------- modelo da MESA: a referência para ver os dedos (funciona com qualquer cor de pele, roupa ou luz) ----------
+// Na calibração sem mãos, a app memoriza a cor (C) e a luz (Y) de cada píxel da mesa. Depois, um dedo é o que TAPA a mesa:
+// muda a cor, ou fica mais claro. Uma sombra só escurece a mesa sem lhe mudar a cor, por isso não conta.
+// Acima da borda de trás da mesa ("horizonte") está o corpo/roupa: é ignorado.
+const TB = { C:null, Y:null, hz:null, tC:6, tY:22, strip:0 };
+const tbOn = () => !!(S.detMode !== 'skin' && cal() && cal().det === 'table' && TB.C && TB.hz);
+function tbFg(i, x, y, Cv, Yv){ if (y < TB.hz[x] - 1) return 0; const t = TB.C[i]; if (t !== t) return 0; return (Math.abs(Cv - t) > TB.tC || Yv - TB.Y[i] > TB.tY) ? 1 : 0; }
+const u8b64 = u => { let q = ''; for (let i = 0; i < u.length; i += 8192) q += String.fromCharCode.apply(null, u.subarray(i, i + 8192)); return btoa(q); };
+const b64u8 = t => { const q = atob(t), u = new Uint8Array(q.length); for (let i = 0; i < q.length; i++) u[i] = q.charCodeAt(i); return u; };
+function tbSave(c){
+  // guarda só a faixa útil (do horizonte até abaixo da linha), em bytes
+  let y0 = rz.H, y1 = 0; for (let x = 0; x < RZW; x++){ y0 = Math.min(y0, TB.hz[x] - 3); y1 = Math.max(y1, Math.ceil(c.a*x + c.b0) + 40); }
+  y0 = clamp(y0, 0, rz.H - 1); y1 = clamp(y1, y0 + 1, rz.H);
+  const n = (y1 - y0)*RZW, cc = new Uint8Array(n), yy = new Uint8Array(n);
+  for (let i = 0; i < n; i++){ const j = y0*RZW + i; cc[i] = clamp(Math.round(TB.C[j] + 100), 0, 255); yy[i] = clamp(Math.round(TB.Y[j]), 0, 255); }
+  c.tb = { y0, y1, c:u8b64(cc), y:u8b64(yy), hz:Array.from(TB.hz), tC:TB.tC, tY:TB.tY, strip:TB.strip };
+}
+function tbLoad(){
+  const c = store.cal; if (!c || !c.tb || !rz.H) return;
+  const t = c.tb, n = RZW*rz.H; TB.C = new Float32Array(n).fill(NaN); TB.Y = new Float32Array(n).fill(NaN);
+  const cc = b64u8(t.c), yy = b64u8(t.y); for (let i = 0; i < cc.length; i++){ const j = t.y0*RZW + i; if (j < n){ TB.C[j] = cc[i] - 100; TB.Y[j] = yy[i]; } }
+  TB.hz = Int16Array.from(t.hz); TB.tC = t.tC; TB.tY = t.tY; TB.strip = t.strip;
 }
 
 // ---------- dos toques às notas ----------
@@ -566,17 +598,25 @@ function startCal(){
     C.timers.push(setTimeout(() => calEnd(phase), t0 + 5200));
   };
   seq('bg', 'Passo 1/4 · Tira as mãos da frente da câmara', 0);
-  seq('white', 'Passo 2/4 · Pousa as PONTAS dos dedos das duas mãos na mesa, onde queres tocar', 5600);
+  seq('white', 'Passo 2/4 · Pousa as PONTAS dos dedos na mesa, uns 5 cm À FRENTE da borda de trás (tem de haver mesa atrás dos dedos)', 5600);
   seq('side', 'Passo 3/4 · Tira a mão DIREITA (põe-na no colo) e deixa a ESQUERDA pousada', 11200);
   seq('black', 'Passo 4/4 · Pousa as pontas como se fosses tocar nas teclas PRETAS: uns 3 cm mais perto do telemóvel', 16800);
 }
 function calFrame(CY){
   const C = rz.calib; if (!C.phase || !CY) return;
   const n = RZW*rz.H, thr = (store.cal && store.cal.thr) || 7, bgm = C.phase === 'bg' ? null : rz.bg, m = new Uint8Array(n);
-  for (let i = 0; i < n; i++) m[i] = (CY.C[i] > thr && CY.Y[i] > 18 && !(bgm && bgm[i])) ? 1 : 0;
-  C.lastC = CY.C;
+  C.lastC = CY.C; C.lastY = CY.Y;
   C.n++;
-  if (C.phase === 'bg'){ for (let i = 0; i < n; i++) C.cnt[i] += m[i]; return; }
+  if (C.phase === 'bg'){
+    for (let i = 0; i < n; i++) m[i] = (CY.C[i] > thr && CY.Y[i] > 18) ? 1 : 0;
+    for (let i = 0; i < n; i++) C.cnt[i] += m[i];
+    if (!C.sC){ C.sC = new Float32Array(n); C.sY = new Float32Array(n); }
+    for (let i = 0; i < n; i++){ C.sC[i] += CY.C[i]; C.sY[i] += CY.Y[i]; }
+    return;
+  }
+  // com as mãos: dedo = o que mudou em relação à imagem sem mãos (qualquer cor de pele, qualquer roupa)
+  if (C.bgC){ for (let i = 0; i < n; i++){ const d = CY.C[i] - C.bgC[i]; m[i] = (Math.abs(d) > 7 || CY.Y[i] - C.bgY[i] > 22) ? 1 : 0; } }
+  else for (let i = 0; i < n; i++) m[i] = (CY.C[i] > thr && CY.Y[i] > 18 && !(bgm && bgm[i])) ? 1 : 0;
   for (let i = 0; i < RZW*Math.round(rz.H*0.3); i++) m[i] = 0;
   const yl = rzLowest(m, RZW, rz.H);
   for (let x = 0; x < RZW; x++) if (yl[x] >= 0) C.cols[x].push(yl[x]);
@@ -589,7 +629,9 @@ function calEnd(phase){
     const b0 = new Uint8Array(RZW*rz.H); for (let i = 0; i < b0.length; i++) b0[i] = C.cnt[i] >= 0.3*C.n ? 1 : 0;
     const b = new Uint8Array(b0.length);
     for (let y = 0; y < rz.H; y++) for (let x = 0; x < RZW; x++){ if (!b0[y*RZW+x]) continue; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++){ const X = x+dx, Y = y+dy; if (X >= 0 && X < RZW && Y >= 0 && Y < rz.H) b[Y*RZW+X] = 1; } }
-    rz.bg = b; return;
+    rz.bg = b;
+    if (C.sC){ C.bgC = C.sC.map(v => v/C.n); C.bgY = C.sY.map(v => v/C.n); C.sC = C.sY = null; }
+    return;
   }
   const yl = new Float32Array(RZW);
   for (let x = 0; x < RZW; x++){ const v = C.cols[x]; if (v.length < 0.5*C.n) yl[x] = -1; else { v.sort((p,q) => p-q); yl[x] = v[v.length>>1]; } }
@@ -611,8 +653,33 @@ function calEnd(phase){
       const pct = (a, q) => { a.sort((p, r) => p - r); return a[Math.floor(q*(a.length - 1))]; };
       if (sk.length > 200 && tb.length > 200){ const s15 = pct(sk, 0.15), t97 = pct(tb, 0.97); if (s15 - t97 > 3) thr = clamp(t97 + 0.4*(s15 - t97), 4, 16); }
     }
-    store.cal = { a:ln.a, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr, flip:!!(old && old.flip), vw:vid.videoWidth, vh:vid.videoHeight, camKey:camKey(), rd:RD.mode || '' };
+    store.cal = { a:ln.a, b0:ln.b, wr:clamp(wr, 10, 60), x0:(xmin + xmax)/2, pb:0, thr, flip:!!(old && old.flip), vw:vid.videoWidth, vh:vid.videoHeight, camKey:camKey(), rd:RD.mode || '', det:'skin' };
     S.lineOff = 0; $('line').value = 0;
+    // Modelo da mesa: borda de trás da mesa (horizonte) em cada coluna e quanta mesa se vê atrás das pontas dos dedos.
+    if (C.bgC){
+      const hz = new Int16Array(RZW), tc = [], strips = [];
+      for (let x = 0; x < RZW; x++){
+        const L = Math.round(ln.a*x + ln.b), ref = [], refY = [];
+        for (let y = L + 3; y < Math.min(rz.H, L + 16); y++){ ref.push(C.bgC[y*RZW + x]); refY.push(C.bgY[y*RZW + x]); }
+        ref.sort((p, q) => p - q); refY.sort((p, q) => p - q);
+        const cR = ref[ref.length >> 1] ?? 0, yR = refY[refY.length >> 1] ?? 0, tolY = Math.max(18, 0.35*yR);
+        let h = Math.max(0, L - 150), run = 0;
+        for (let y = L; y >= Math.max(0, L - 150); y--){
+          const j = y*RZW + x, off = Math.abs(C.bgC[j] - cR) > 6 || Math.abs(C.bgY[j] - yR) > tolY;
+          run = off ? run + 1 : 0; if (run >= 2){ h = y + 2; break; }
+        }
+        hz[x] = h; strips.push(L - h);
+        if (C.lastC) for (let y = L + 3; y < Math.min(rz.H, L + 16); y++) tc.push(Math.abs(C.lastC[y*RZW + x] - C.bgC[y*RZW + x]));
+      }
+      // suaviza o horizonte (mediana de 9 colunas)
+      const hs = new Int16Array(RZW); for (let x = 0; x < RZW; x++){ const w = []; for (let k = -4; k <= 4; k++) w.push(hz[clamp(x + k, 0, RZW - 1)]); w.sort((p, q) => p - q); hs[x] = w[4]; }
+      strips.sort((p, q) => p - q); tc.sort((p, q) => p - q);
+      TB.C = C.bgC; TB.Y = C.bgY; TB.hz = hs; TB.strip = strips[strips.length >> 1];
+      TB.tC = clamp((tc[Math.floor(tc.length*0.95)] || 3)*1.8, 5, 12); TB.tY = 22;
+      const tauPx = S.tauMm*clamp(wr, 10, 60)/16;
+      if (TB.strip >= Math.max(6, 2.2*tauPx)){ store.cal.det = 'table'; tbSave(store.cal); }
+      else C.warnStrip = true;
+    }
     return;
   }
   if (phase === 'side'){
@@ -625,7 +692,8 @@ function calEnd(phase){
   const pens = []; for (let x = 0; x < RZW; x++) if (yl[x] >= 0){ const p = yl[x] - ly(x); if (p > -3 && p < 60) pens.push(p); }
   pens.sort((p,q) => p-q); c.pb = pens.length > 20 ? Math.max(0, pens[Math.floor(pens.length*0.6)]) : 0; c.pbMm = 30;
   save(); rz.calib = null; releaseAll(); showUI(); layout(); planOct();
-  banner(c.pb >= 1.2 ? 'Calibrado. Brancas na linha; pretas com o dedo mais à frente.' : 'Calibrado. Pretas: põe o dedo em cima da risca entre duas brancas.', 4500);
+  if (C.warnStrip) banner('Calibrado, mas os teus dedos tocam mesmo na borda de trás da mesa, sem mesa atrás deles: a app confunde-os com a roupa. Põe as mãos uns 5 cm mais à frente (mais perto do telemóvel) e calibra outra vez.', 9000);
+  else banner((c.det === 'table' ? 'Calibrado (pela mesa). ' : 'Calibrado. ') + (c.pb >= 1.2 ? 'Brancas na linha; pretas com o dedo mais à frente.' : 'Pretas: põe o dedo em cima da risca entre duas brancas.'), 4500);
 }
 
 // ---------- músicas: modos Esperar / Livre e oitava automática ----------
@@ -853,7 +921,7 @@ function layout(){
   } else L.dy = (SH - vh*s)*0.35;
   Object.assign(vid.style, { width:vw*s + 'px', height:vh*s + 'px', left:L.dx + 'px', top:L.dy + 'px' });
 }
-vid.addEventListener('loadedmetadata', () => { rzSize(); rz.accC = null; rdReset(); if (store.cal && store.cal.rd && !RD.fail[store.cal.rd]) RD.mode = store.cal.rd; layout(); showUI(); if (store.cal && !calValid()) banner('A imagem da câmara mudou: toca em “Calibrar”.', 6000); });
+vid.addEventListener('loadedmetadata', () => { rzSize(); rz.accC = null; rdReset(); try { tbLoad(); } catch(e){} if (store.cal && store.cal.rd && !RD.fail[store.cal.rd]) RD.mode = store.cal.rd; layout(); showUI(); if (store.cal && !calValid()) banner('A imagem da câmara mudou: toca em “Calibrar”.', 6000); });
 // px de análise → ecrã (espelhado, como um espelho: a tua mão direita aparece à direita)
 function toScr(x, y){ return [SW - (L.dx + (x/rz.sc)*L.s), L.dy + (y/rz.sc)*L.s]; }
 function draw(){
@@ -914,6 +982,7 @@ function draw(){
     if (HR && q.tp) continue;          // já está marcado na ponta do dedo reconhecido
     const p = toScr(q.xs, ly(q.xs) + Math.min(q.pens, 0)); g.beginPath(); g.arc(p[0], p[1], 9, 0, Math.PI*2); g.fill(); g.stroke(); }
   if (S.debug){
+    if (tbOn()){ g.fillStyle = '#ffd36b'; for (let x = 0; x < RZW; x += 4){ const p = toScr(x, TB.hz[x]); g.fillRect(p[0] - 1, p[1] - 1, 2.5, 2.5); } }
     g.fillStyle = '#ff7a6b'; if (rz.yl) for (let x = 0; x < RZW; x += 2) if (rz.yl[x] >= 0){ const p = toScr(x, rz.yl[x] + rz.yTop); g.fillRect(p[0] - 1, p[1] - 1, 2.5, 2.5); }
     if (hands.res && performance.now()/1000 - hands.res.t < 0.5){ g.fillStyle = '#ffd36b'; for (const pts of hands.res.hands) for (const k of [4,8,12,16,20]){ const p = toScr(pts[k][0], pts[k][1]); g.fillRect(p[0] - 3, p[1] - 3, 6, 6); } }
     g.font = '600 11px Inter, system-ui'; g.fillStyle = '#eafaf7'; g.textBaseline = 'middle';
@@ -1007,12 +1076,12 @@ $('bFlip').onclick = () => { if (cal()){ cal().flip = !cal().flip; save(); relea
 $('line').oninput = e => { S.lineOff = +e.target.value; $('lineV').textContent = S.lineOff; releaseAll(); save(); layout(); };
 $('bSet').onclick = () => { const p = $('pop'); p.style.display = p.style.display === 'block' ? 'none' : 'block'; $('songs').style.display = 'none'; renderPop(); renderCams(); };
 function seg(id, key, conv){ for (const b of $(id).querySelectorAll('button')){ b.onclick = () => { S[key] = conv(b.dataset.v); save(); renderPop(); releaseAll(); if (key === 'hands'){ S.hands ? handsStart() : handsStop(); } }; } }
-seg('blk', 'blackMode', v => v); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1');
+seg('blk', 'blackMode', v => v); seg('detM', 'detMode', v => v); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1');
 function renderPop(){
   $('bf').value = S.blackFwd; $('bfV').textContent = S.blackFwd + ' mm';
   $('tau').value = S.tauMm; $('tauV').textContent = S.tauMm + ' mm'; $('ks').value = S.keyScale; $('ksV').textContent = S.keyScale.toFixed(2) + '×';
   $('vol').value = S.volume; $('volV').textContent = S.volume + ' dB';
-  for (const [id, key, f] of [['camSz','cam',v => v], ['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
+  for (const [id, key, f] of [['detM','detMode',v => v], ['camSz','cam',v => v], ['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
   $('bDbg').classList.toggle('on', S.debug);
 }
 for (const b of $('camSz').querySelectorAll('button')) b.onclick = async () => { S.cam = b.dataset.v; save(); renderPop(); await switchCam(); };
