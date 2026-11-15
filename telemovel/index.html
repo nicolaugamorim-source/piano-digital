@@ -100,7 +100,8 @@ body{background:#000}
   <label>Volume: <b id="volV"></b></label>
   <input type="range" id="vol" min="-30" max="6" step="1">
   <label>Ferramentas</label>
-  <div class="row"><button class="btn" id="bDbg">Ver diagnóstico</button><button class="btn" id="bDiag">Gravar diagnóstico (PNG)</button></div>
+  <div class="row"><button class="btn pri" id="bTest">Teste guiado gravado (40 s)</button></div>
+  <div class="row" style="margin-top:6px"><button class="btn" id="bDbg">Ver diagnóstico</button><button class="btn" id="bDiag">Gravar diagnóstico (PNG)</button></div>
   <p style="color:var(--mu);font-size:12px;margin:12px 0 0" id="ver"></p>
 </div>
 <div id="start">
@@ -111,7 +112,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-9';
+const APP_VER = 'tel-10';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -481,6 +482,7 @@ function toNotes(res, t, c){
     if (t - t0 >= 0.07){ rz.missT.delete(midi); rz.active.delete(midi); rz.offT.set(midi, t); noteOff(midi); }
   }
   rz.prev = res.touches; rz.touches = res.touches; rz.hovers = res.hovers;
+  if (TEST.on) TEST.fr.push([+(t - TEST.t0).toFixed(3), res.touches.map(q => [Math.round(q.xs), +q.pens.toFixed(1), q.base ?? null, q.black ? 1 : 0, q.locked ? 1 : 0, q.land ? 1 : 0, q.midi ?? null]), res.hovers.map(h => [Math.round(h.x), +h.gap.toFixed(1)])]);
 }
 
 // ---------- som ----------
@@ -501,10 +503,12 @@ let lastNote = { m:null, t:0 };
 const offOf = h => h === 'L' ? S.offL : S.offR;
 function noteOn(midi, vel, hand){
   practiceOnPress(midi);
+  if (TEST.on) TEST.ev.push(['on', +(performance.now()/1000 - TEST.t0).toFixed(3), midi, hand, +vel.toFixed(2)]);
   if (audioReady){ try { sampler.triggerAttack(Tone.Frequency(midi, 'midi').toNote(), Tone.now(), vel); } catch(e){} }
   lastNote = { m:midi, t:performance.now() }; $('note').textContent = noteName(midi);
 }
-function noteOff(midi){ if (audioReady){ try { sampler.triggerRelease(Tone.Frequency(midi, 'midi').toNote(), Tone.now()); } catch(e){} } }
+function noteOff(midi){
+  if (TEST.on) TEST.ev.push(['off', +(performance.now()/1000 - TEST.t0).toFixed(3), midi]); if (audioReady){ try { sampler.triggerRelease(Tone.Frequency(midi, 'midi').toNote(), Tone.now()); } catch(e){} } }
 
 // ---------- mãos em segundo plano (MediaPipe num worker: nunca atrasa a câmara) ----------
 const hands = { w:null, busy:false, ready:false, res:null, ms:0, err:'', lastSend:0 };
@@ -713,7 +717,9 @@ function practiceOnPress(midi){
 }
 // teclas da mesa que devem acender: tecla física = nota − 12 × oitava da mão
 function practiceKeys(){
-  const out = new Map(); if (!P.on || !P.song) return out;
+  const out = new Map();
+  if (TEST.on && TEST.cur){ for (const m of TEST.cur.keys) out.set(m, 1); return out; }
+  if (!P.on || !P.song) return out;
   const G = P.song.groups, put = (n, v) => { const p = n.midi - 12*kOf(n); out.set(p, Math.max(out.get(p) || 0, v)); };
   if (P.mode === 'wait'){
     if (G[P.idx]) for (const n of G[P.idx].notes) if (!n.hit) put(n, 1);
@@ -770,6 +776,66 @@ $('midiFile').onchange = async e => {
   } catch(err){ banner('Não consegui ler esse ficheiro MIDI.', 3500); }
   e.target.value = '';
 };
+
+// ---------- teste guiado gravado: vídeo da câmara + tudo o que foi detetado, para analisar os enganos ----------
+const TEST = { on:false, t0:0, ev:[], fr:[], pr:[], cur:null, rec:null, chunks:[] };
+function testPlan(){
+  const z = zones(); if (!z) return null;
+  const W = (lo, hi) => WHITES.filter(m => m >= lo && m <= hi), out = [];
+  const rw = W(z.R.lo, z.R.hi).slice(0, 5), lw = W(z.L.lo, z.L.hi).slice(-4);
+  const blacks = ws => ws.filter(m => hasBlackAfter(m)).map(m => m + 1).filter(b => ws.includes(b + 1) || ws.includes(b - 1));
+  for (const m of rw) out.push({ keys:[m], txt:`mão direita: ${noteName(m)}` });
+  for (const m of blacks(rw).slice(0, 3)) out.push({ keys:[m], txt:`mão direita: ${noteName(m)} (preta)` });
+  for (const m of lw) out.push({ keys:[m], txt:`mão esquerda: ${noteName(m)}` });
+  for (const m of blacks(lw).slice(0, 2)) out.push({ keys:[m], txt:`mão esquerda: ${noteName(m)} (preta)` });
+  if (rw[0]) out.push({ keys:[rw[0]], txt:`${noteName(rw[0])} DUAS vezes seguidas`, twice:true });
+  if (rw[2]) out.push({ keys:[rw[0], rw[2]], txt:`${noteName(rw[0])} e ${noteName(rw[2])} ao mesmo tempo` });
+  out.push({ keys:[], txt:'mãos no ar, perto da mesa, SEM tocar' });
+  return out;
+}
+async function testStart(){
+  if (!stream || TEST.on) return;
+  if (!cal()){ banner('Calibra primeiro.', 2500); return; }
+  const plan = testPlan(); if (!plan){ banner('Calibra primeiro.', 2500); return; }
+  $('pop').style.display = 'none'; practiceStop(); releaseAll();
+  const offs = [S.offL, S.offR]; S.offL = 0; S.offR = 0; renderOff();
+  let mime = ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm', 'video/mp4'].find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+  try { TEST.rec = new MediaRecorder(stream, mime ? { mimeType:mime, videoBitsPerSecond:3000000 } : {}); } catch(e){ banner('Este telemóvel não deixa gravar vídeo aqui.', 3000); return; }
+  Object.assign(TEST, { ev:[], fr:[], pr:[], cur:null, chunks:[], mime:TEST.rec.mimeType || mime || '' });
+  TEST.rec.ondataavailable = e => { if (e.data && e.data.size) TEST.chunks.push(e.data); };
+  TEST.rec.onstart = () => { TEST.t0 = performance.now()/1000; TEST.on = true; };
+  TEST.rec.start(1000);
+  const STEP = 2.4;
+  for (let k = 0; k < 3; k++) setTimeout(() => banner(`Teste: toca cada tecla quando ela acender e LEVANTA o dedo logo a seguir… ${3-k}`), k*1000);
+  plan.forEach((p, i) => setTimeout(() => { TEST.cur = p; TEST.pr.push([+(performance.now()/1000 - TEST.t0).toFixed(3), p.keys, p.txt]); banner(`${i+1}/${plan.length} · ${p.txt}`); }, 3000 + i*STEP*1000));
+  setTimeout(() => testEnd(plan, offs), 3000 + plan.length*STEP*1000);
+}
+function dl(blob, name){ const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
+function testEnd(plan, offs){
+  TEST.cur = null;
+  const tEnd = performance.now()/1000 - TEST.t0;
+  TEST.rec.onstop = () => {
+    TEST.on = false; S.offL = offs[0]; S.offR = offs[1]; renderOff();
+    // resumo: em cada pedido, que teclas da mesa soaram
+    let ok = 0; const res = [];
+    TEST.pr.forEach((p, i) => {
+      const t1 = p[0], t2 = i + 1 < TEST.pr.length ? TEST.pr[i + 1][0] : tEnd;
+      const on = TEST.ev.filter(e => e[0] === 'on' && e[1] >= t1 && e[1] < t2).map(e => e[2]);
+      const want = p[1], good = want.length ? want.every(m => on.includes(m)) && on.every(m => want.includes(m)) && (!plan[i].twice || on.length >= 2) : on.length === 0;
+      if (good) ok++; res.push([p[2], on.map(noteName), good]);
+    });
+    const tr = stream.getVideoTracks()[0], st = tr.getSettings ? tr.getSettings() : {};
+    const log = { ver:APP_VER, date:new Date().toISOString(), ua:navigator.userAgent, video:[vid.videoWidth, vid.videoHeight], camFps:st.frameRate || null, rd:RD.mode, RZW, H:rz.H,
+      cal:store.cal, S:{ tauMm:S.tauMm, keyScale:S.keyScale, blackMode:S.blackMode, blackHalf:S.blackHalf, blackFwd:S.blackFwd, center:S.center, cam:S.cam }, mime:TEST.mime,
+      prompts:TEST.pr, events:TEST.ev, frames:TEST.fr, summary:{ ok, total:TEST.pr.length, items:res } };
+    const ext = /mp4/.test(TEST.mime) ? 'mp4' : 'webm';
+    dl(new Blob(TEST.chunks, { type:TEST.mime || 'video/webm' }), `piano-teste.${ext}`);
+    setTimeout(() => dl(new Blob([JSON.stringify(log)], { type:'application/json' }), 'piano-teste.json'), 800);
+    banner(`Teste acabado: ${ok} de ${TEST.pr.length} certos. Guardei 2 ficheiros nas transferências (piano-teste.${ext} e piano-teste.json): manda-mos.`, 9000);
+  };
+  TEST.rec.stop();
+}
+$('bTest').onclick = testStart;
 
 // ---------- desenho (por cima do vídeo) ----------
 const ov = $('ov'), g = ov.getContext('2d');
