@@ -114,7 +114,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-13';
+const APP_VER = 'tel-14';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -381,7 +381,7 @@ function processFrame(t, R, CY){
   for (const tr of rz.tracks) while (tr.h.length && t - tr.h[0][0] > 0.3) tr.h.shift();
   // Toque pela BATIDA: um dedo que desce depressa e PÁRA perto da mesa está a tocar, mesmo que fique um pouco acima da linha
   // (quem toca mais para trás aparece mais acima na imagem do que a linha medida na calibração). Vê-se coluna a coluna.
-  { const landMax = Math.max(2.2*tauOn, 5*pxmm), drop = 4*pxmm, rel = 2.5*pxmm, still = Math.max(1, 0.6*pxmm);
+  { const landMax = Math.max(2.2*tauOn, 5*pxmm, (S.landPb ?? 1.1)*(c.pb || 0)), drop = 4*pxmm, rel = 2.5*pxmm, still = Math.max(1, 0.6*pxmm);
     if (!rz.landF || rz.landF.length !== RZW) rz.landF = new Float32Array(RZW).fill(999);
     const LF = rz.landF, H2 = rz.hist, prev = H2.length >= 2 ? H2[H2.length - 2].gap : null;
     for (let x = 0; x < RZW; x++){
