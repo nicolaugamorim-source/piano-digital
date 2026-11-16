@@ -114,7 +114,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-15';
+const APP_VER = 'tel-16';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -431,13 +431,15 @@ function processFrame(t, R, CY){
         if (dy < (S.tipDy || 1.6)*c.wr && dy > -1.5*c.wr) tl.push({ x:q[0], y:q[1], f, hi:hi0, id:HT.ids[hi0]*5 + f, ex:f === 0 ? Math.abs(pts[3][0] - q[0]) : 0 }); } });
       tl.sort((a, b) => a.x - b.x);
       if (!rz.mem) rz.mem = new Map();
-      const out = [], fresh = [];
+      const out = [], fresh = [], drops = [];
       tl.forEach((tp, k) => {
         let lo = tp.x - 0.6*c.wr - tp.ex*0.25, hi = tp.x + 0.6*c.wr + tp.ex*0.25;
         if (k > 0) lo = Math.max(lo, (tl[k-1].x + tp.x)/2); if (k < tl.length - 1) hi = Math.min(hi, (tl[k+1].x + tp.x)/2);
         const a = Math.max(0, Math.round(lo)), b = Math.min(RZW - 1, Math.round(hi)); if (b < a) return;
         let g = 999, landed = false;
         for (let x = a; x <= b; x++){ if (gap[x] < g) g = gap[x]; if (LF && LF[x] < 900) landed = true; }
+        { let pm = 0; for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.3) continue; let m = 999; for (let x = a; x <= b; x++) m = Math.min(m, fr.gap[x]); pm = Math.max(pm, Math.min(m, 60)); }
+          drops.push({ hi:tp.hi, id:tp.id, d:Math.max(0, pm - Math.min(g, 60)) }); }
         // posição do contacto = MEIO da zona encostada (o ponto mais baixo salta de coluna em coluna com o ruído)
         let sx = 0, n = 0; for (let x = a; x <= b; x++) if (gap[x] <= g + 1.5){ sx += x; n++; }
         const gx = n ? sx/n : tp.x;
@@ -463,8 +465,18 @@ function processFrame(t, R, CY){
       if (S.strike){
         // mão inteira a pousar (4+ dedos juntos) não é acorde
         for (const h of new Set(fresh.map(q => q.tp.hi))){ const grp = fresh.filter(q => q.tp.hi === h); if (grp.length >= 4) for (const q of grp){ q.snd = false; rz.mem.get(q.id).snd = false; } }
-        // dedo arrastado pelo vizinho: bate ao mesmo tempo mas desce muito menos → não conta
-        for (const q of fresh) for (const r of fresh){ if (q === r || q.tp.hi !== r.tp.hi || Math.abs(q.f - r.f) !== 1) continue; if (q.best < 0.5*r.best){ q.snd = false; rz.mem.get(q.id).snd = false; } }
+        // Quem bate é o dedo que desce MAIS DEPRESSA em relação aos outros da mesma mão (estudos de teclados com câmara):
+        // · dedo arrastado por outro que bateu com mais força (até 0,15 s antes) → não conta
+        // · a mão inteira desceu (os outros dedos também desceram quase o mesmo) → é pousar/mover a mão, não conta
+        rz.recentOn = (rz.recentOn || []).filter(r => t - r.t < 0.15);
+        for (const q of fresh){
+          if (!q.snd) continue;
+          const strong = Math.max(0, ...fresh.filter(r => r !== q && r.tp.hi === q.tp.hi).map(r => r.best), ...rz.recentOn.filter(r => r.hi === q.tp.hi && r.id !== q.id).map(r => r.best));
+          const oth = drops.filter(d => d.hi === q.tp.hi && d.id !== q.id && !fresh.some(r => r.id === d.id)).map(d => d.d).sort((a, b) => a - b);
+          const med = oth.length >= 2 ? oth[oth.length >> 1] : 0;
+          if (q.best < 0.45*strong || (S.handSub !== false && med > 0.6*q.best)){ q.snd = false; rz.mem.get(q.id).snd = false; }
+        }
+        for (const q of fresh) if (q.snd) rz.recentOn.push({ t, hi:q.tp.hi, id:q.id, best:q.best });
       }
       res.touches = out;
     }
