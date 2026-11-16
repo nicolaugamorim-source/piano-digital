@@ -114,7 +114,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-14';
+const APP_VER = 'tel-15';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -412,33 +412,60 @@ function processFrame(t, R, CY){
   // O contacto mede-se na imagem atual (30 por segundo); o reconhecimento só diz ONDE estão os dedos.
   rz.tipMode = false;
   { const HT = (S.gate && S.hands && hands.nOk > 2 && hands.res && t - hands.res.t < 1.0) ? hands.res : null;
+    // ruído do sinal (quanto a distância dedo–mesa "treme" de imagem para imagem): o limiar da batida nunca fica abaixo de 3× isto
+    { const pg = rz.hist.length >= 2 ? rz.hist[rz.hist.length - 2].gap : null;
+      if (pg){ const d = []; for (let x = 0; x < RZW; x += 2) if (gap[x] < 40 && pg[x] < 40) d.push(Math.abs(gap[x] - pg[x]));
+        if (d.length > 20){ d.sort((a, b) => a - b); rz.noise = 0.95*(rz.noise ?? d[d.length >> 1]) + 0.05*d[d.length >> 1]; } } }
+    const thr = Math.max((S.strikeMm || 4)*pxmm, 3*(rz.noise || 0));
     if (HT && HT.hands.length){
       rz.tipMode = true;
-      const LF = rz.landF, hs = HT.hands.map((p, i) => [p, i]).sort((a, b) => a[0][0][0] - b[0][0][0]), tl = [];
-      hs.forEach(([pts, hi0], hi) => { for (let f = 0; f < 5; f++){ const q = pts[[4,8,12,16,20][f]], dy = ly(q[0]) - q[1];
-        if (dy < (S.tipDy || 1.6)*c.wr && dy > -1.5*c.wr) tl.push({ x:q[0], y:q[1], f, hi:hi0, id:hi*5 + f, ex:f === 0 ? Math.abs(pts[3][0] - q[0]) : 0 }); } });
+      // identidade de cada mão estável entre reconhecimentos (pela posição do pulso)
+      if (!HT.ids){
+        const prevH = rz.hPrev || [], ids = [];
+        HT.hands.forEach(pts => { let best = null, bd = 5*c.wr; for (const p of prevH){ const d = Math.abs(p.x - pts[0][0]); if (d < bd && !ids.includes(p.id)){ bd = d; best = p; } }
+          let id = best ? best.id : -1; if (id < 0){ id = 0; while (ids.includes(id) || prevH.some(p => p.id === id)) id++; } ids.push(id); });
+        HT.ids = ids; rz.hPrev = HT.hands.map((pts, k) => ({ x:pts[0][0], id:ids[k] }));
+      }
+      const LF = rz.landF, tl = [];
+      HT.hands.forEach((pts, hi0) => { for (let f = 0; f < 5; f++){ const q = pts[[4,8,12,16,20][f]], dy = ly(q[0]) - q[1];
+        if (dy < (S.tipDy || 1.6)*c.wr && dy > -1.5*c.wr) tl.push({ x:q[0], y:q[1], f, hi:hi0, id:HT.ids[hi0]*5 + f, ex:f === 0 ? Math.abs(pts[3][0] - q[0]) : 0 }); } });
       tl.sort((a, b) => a.x - b.x);
-      const out = [];
+      if (!rz.mem) rz.mem = new Map();
+      const out = [], fresh = [];
       tl.forEach((tp, k) => {
         let lo = tp.x - 0.6*c.wr - tp.ex*0.25, hi = tp.x + 0.6*c.wr + tp.ex*0.25;
         if (k > 0) lo = Math.max(lo, (tl[k-1].x + tp.x)/2); if (k < tl.length - 1) hi = Math.min(hi, (tl[k+1].x + tp.x)/2);
         const a = Math.max(0, Math.round(lo)), b = Math.min(RZW - 1, Math.round(hi)); if (b < a) return;
-        let g = 999, gx = tp.x, landed = false;
-        for (let x = a; x <= b; x++){ if (gap[x] < g){ g = gap[x]; gx = x; } if (LF && LF[x] < 900) landed = true; }
+        let g = 999, landed = false;
+        for (let x = a; x <= b; x++){ if (gap[x] < g) g = gap[x]; if (LF && LF[x] < 900) landed = true; }
+        // posição do contacto = MEIO da zona encostada (o ponto mais baixo salta de coluna em coluna com o ruído)
+        let sx = 0, n = 0; for (let x = a; x <= b; x++) if (gap[x] <= g + 1.5){ sx += x; n++; }
+        const gx = n ? sx/n : tp.x;
+        const mem = rz.mem.get(tp.id) || { lastOn:-9, armed:true, snd:false, t0:0, vel:0.5 };
         const pv = rz.prev.find(q => q.id === tp.id && Math.abs(q.x - gx) < 1.2*c.wr);
-        if (!(g <= (pv ? tauOff : tauOn) || landed)) return;
+        const on = g <= (pv ? tauOff : tauOn) || landed;
+        if (!on){ if (g > thr) mem.armed = true; rz.mem.set(tp.id, mem); return; }
         const tc = { x:gx, w:b - a + 1, pen:-g, id:tp.id, f:tp.f, tp, tipT:t, land:landed };
         if (pv){ tc.xs = follow(pv.xs, gx, 0.35*c.wr); tc.pens = follow(pv.pens, -g, 4); tc.snd = pv.snd; tc.vel = pv.vel; tc.t0 = pv.t0; }
-        else {
+        else if (!mem.armed && t - mem.lastOn < 0.25){
+          // o dedo só "piscou" (ruído) sem levantar a sério: continua o mesmo toque, sem nova nota
+          tc.xs = gx; tc.pens = -g; tc.snd = mem.snd; tc.vel = mem.vel; tc.t0 = mem.t0;
+        } else {
           let best = 0, tb = t;
-          for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.25) continue; let m = 999; for (let x = a; x <= b; x++) m = Math.min(m, fr.gap[x]); m = Math.min(m, 60); if (m > best){ best = m; tb = fr.t; } }
-          tc.xs = gx; tc.pens = -g; tc.t0 = t;
-          tc.snd = !S.strike || best >= (S.strikeMm || 3)*pxmm; tc.vel = clamp(0.3 + ((best/pxmm)/Math.max(t - tb, 1/60))/500, 0.3, 1);
+          for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.3) continue; let m = 999; for (let x = a; x <= b; x++) m = Math.min(m, fr.gap[x]); m = Math.min(m, 60); if (m > best){ best = m; tb = fr.t; } }
+          tc.xs = gx; tc.pens = -g; tc.t0 = t; tc.best = best;
+          tc.snd = !S.strike || best >= thr; tc.vel = clamp(0.3 + ((best/pxmm)/Math.max(t - tb, 1/60))/500, 0.3, 1);
+          if (tc.snd) fresh.push(tc);
         }
+        mem.lastOn = t; mem.armed = false; mem.snd = tc.snd; mem.t0 = tc.t0; mem.vel = tc.vel; rz.mem.set(tp.id, mem);
         out.push(tc);
       });
-      if (S.strike){ const fresh = out.filter(q => q.snd && t - q.t0 < 0.1);
-        for (const hi of new Set(fresh.map(q => q.tp.hi))){ const grp = fresh.filter(q => q.tp.hi === hi); if (grp.length >= 4) for (const q of grp) q.snd = false; } }
+      if (S.strike){
+        // mão inteira a pousar (4+ dedos juntos) não é acorde
+        for (const h of new Set(fresh.map(q => q.tp.hi))){ const grp = fresh.filter(q => q.tp.hi === h); if (grp.length >= 4) for (const q of grp){ q.snd = false; rz.mem.get(q.id).snd = false; } }
+        // dedo arrastado pelo vizinho: bate ao mesmo tempo mas desce muito menos → não conta
+        for (const q of fresh) for (const r of fresh){ if (q === r || q.tp.hi !== r.tp.hi || Math.abs(q.f - r.f) !== 1) continue; if (q.best < 0.5*r.best){ q.snd = false; rz.mem.get(q.id).snd = false; } }
+      }
       res.touches = out;
     }
   }
@@ -1056,7 +1083,9 @@ function draw(){
   if (HR){
     // mão completa (do reconhecimento das mãos): ligações, articulações e pontas; ponta cheia = dedo a tocar
     if (!hands.disp || hands.disp.length !== HR.hands.length) hands.disp = HR.hands.map(h => h.map(q => q.slice()));
-    HR.hands.forEach((pts, hi) => { const d = hands.disp[hi]; for (let k = 0; k < 21; k++){ d[k][0] += 0.6*(pts[k][0] - d[k][0]); d[k][1] += 0.6*(pts[k][1] - d[k][1]); } });
+    // filtro adaptativo (ideia do filtro "One Euro"): parado → quase não mexe (sem tremer); movimento grande → segue logo
+    const cw = (cal() && cal().wr) || 24;
+    HR.hands.forEach((pts, hi) => { const d = hands.disp[hi]; for (let k = 0; k < 21; k++){ const dx = pts[k][0] - d[k][0], dy = pts[k][1] - d[k][1], m = Math.hypot(dx, dy), a = m < 0.12*cw ? 0 : clamp(m/(1.2*cw), 0.06, 0.6); d[k][0] += a*dx; d[k][1] += a*dy; } });
     const tt = rz.tipTouch || new Set();
     hands.disp.forEach((pts, hi) => {
       const sp = pts.map(q => toScr(q[0], q[1]));
