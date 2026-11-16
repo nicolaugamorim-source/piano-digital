@@ -114,7 +114,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-16';
+const APP_VER = 'tel-17';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -360,7 +360,7 @@ function processFrame(t, R, CY){
     const speed = (best/pxmm)/Math.max(t - tb, 1/60);
     // Só toca quando o dedo BATE (vinha de cima, ≥ 3 mm nos últimos 0,25 s). Dedos pousados, a deslizar ou a palma não tocam,
     // tal como num piano: pousar a mão nas teclas não faz som.
-    tc.snd = !S.strike || best >= (S.strikeMm || 3)*pxmm; tc.vel = clamp(0.3 + speed/500, 0.3, 1); tc.t0 = t;
+    tc.snd = !S.strike || best >= (S.strikeMm || 3)*pxmm; tc.vel = velOf(speed); tc.t0 = t;
   }
   // mão inteira a pousar de uma vez (4+ dedos a bater juntos na mesma mão): é pousar a mão, não um acorde
   if (S.strike){
@@ -456,7 +456,7 @@ function processFrame(t, R, CY){
           let best = 0, tb = t;
           for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.3) continue; let m = 999; for (let x = a; x <= b; x++) m = Math.min(m, fr.gap[x]); m = Math.min(m, 60); if (m > best){ best = m; tb = fr.t; } }
           tc.xs = gx; tc.pens = -g; tc.t0 = t; tc.best = best;
-          tc.snd = !S.strike || best >= thr; tc.vel = clamp(0.3 + ((best/pxmm)/Math.max(t - tb, 1/60))/500, 0.3, 1);
+          tc.snd = !S.strike || best >= thr; tc.vel = velOf((best/pxmm)/Math.max(t - tb, 1/60));
           if (tc.snd) fresh.push(tc);
         }
         mem.lastOn = t; mem.armed = false; mem.snd = tc.snd; mem.t0 = tc.t0; mem.vel = tc.vel; rz.mem.set(tp.id, mem);
@@ -628,17 +628,39 @@ async function initAudio(){
     release: 1.2, baseUrl: 'https://tonejs.github.io/audio/salamander/', onload: () => { audioReady = true; }
   }).toDestination();
   sampler.volume.value = S.volume;
+  setTimeout(initLayers, 1500);
 }
+// Piano mais real: o Salamander (Yamaha C5) foi gravado com várias FORÇAS por tecla. Bater devagar usa a gravação suave
+// (som mais escuro), bater forte usa a forte (mais brilhante) — não é só mudar o volume, como num piano a sério.
+// Carrega em segundo plano; até lá toca o som simples.
+const LAYERS = [1, 5, 10, 15], LBASE = 'https://tambien.github.io/Piano/audio/';
+let layers = null, layersReady = false; const playing = new Map();
+function initLayers(){
+  if (layers || typeof Tone === 'undefined') return;
+  const notes = []; for (let m = 21; m <= 108; m += 3) notes.push(m);
+  const nm = m => ['C','Cs','D','Ds','E','F','Fs','G','Gs','A','As','B'][m % 12] + (Math.floor(m/12) - 1);
+  let left = LAYERS.length;
+  layers = LAYERS.map(v => { const urls = {}; for (const m of notes) urls[Tone.Frequency(m, 'midi').toNote()] = nm(m) + 'v' + v + '.mp3';
+    const sm = new Tone.Sampler({ urls, baseUrl:LBASE, release:0.5, onload:() => { if (--left === 0) layersReady = true; }, onerror:() => {} }).toDestination();
+    sm.volume.value = S.volume + 4; return sm; });
+}
+// força do toque (mm/s da descida) → velocidade 0–1, com curva parecida à de um piano digital ("piano touch")
+function velOf(speed){ return 0.12 + 0.88*Math.pow(clamp(speed/(S.touchMms || 350), 0, 1), 0.7); }
 let lastNote = { m:null, t:0 };
 const offOf = h => h === 'L' ? S.offL : S.offR;
 function noteOn(midi, vel, hand){
   practiceOnPress(midi);
   if (TEST.on) TEST.ev.push(['on', +(performance.now()/1000 - TEST.t0).toFixed(3), midi, hand, +vel.toFixed(2)]);
-  if (audioReady){ try { sampler.triggerAttack(Tone.Frequency(midi, 'midi').toNote(), Tone.now(), vel); } catch(e){} }
+  try {
+    const n = Tone.Frequency(midi, 'midi').toNote();
+    if (layersReady){ const li = vel < 0.3 ? 0 : vel < 0.55 ? 1 : vel < 0.8 ? 2 : 3, lo = [0.12, 0.3, 0.55, 0.8][li], hi = [0.3, 0.55, 0.8, 1.01][li];
+      const sm = layers[li]; sm.triggerAttack(n, Tone.now(), 0.75 + 0.25*clamp((vel - lo)/(hi - lo), 0, 1)); playing.set(midi, sm); }
+    else if (audioReady){ sampler.triggerAttack(n, Tone.now(), vel); playing.set(midi, sampler); }
+  } catch(e){}
   lastNote = { m:midi, t:performance.now() }; $('note').textContent = noteName(midi);
 }
 function noteOff(midi){
-  if (TEST.on) TEST.ev.push(['off', +(performance.now()/1000 - TEST.t0).toFixed(3), midi]); if (audioReady){ try { sampler.triggerRelease(Tone.Frequency(midi, 'midi').toNote(), Tone.now()); } catch(e){} } }
+  if (TEST.on) TEST.ev.push(['off', +(performance.now()/1000 - TEST.t0).toFixed(3), midi]); const sm = playing.get(midi); if (sm){ try { sm.triggerRelease(Tone.Frequency(midi, 'midi').toNote(), Tone.now()); } catch(e){} playing.delete(midi); } }
 
 // ---------- mãos em segundo plano (MediaPipe num worker: nunca atrasa a câmara) ----------
 const hands = { w:null, busy:false, ready:false, res:null, ms:0, err:'', lastSend:0, main:null, mainMs:0, where:'fundo', nRes:0, tried:false, nOk:0 };
@@ -1230,7 +1252,7 @@ async function renderCams(){
 $('bf').oninput = e => { S.blackFwd = +e.target.value; save(); renderPop(); };
 $('tau').oninput = e => { S.tauMm = +e.target.value; save(); renderPop(); };
 $('ks').oninput = e => { S.keyScale = +e.target.value; save(); renderPop(); releaseAll(); planOct(); };
-$('vol').oninput = e => { S.volume = +e.target.value; if (sampler) sampler.volume.value = S.volume; save(); renderPop(); };
+$('vol').oninput = e => { S.volume = +e.target.value; if (sampler) sampler.volume.value = S.volume; if (layers) layers.forEach(l => l.volume.value = S.volume + 4); save(); renderPop(); };
 $('bDbg').onclick = () => { S.debug = !S.debug; save(); renderPop(); };
 // Diagnóstico: 6 imagens da câmara (sem desenhos) numa folha PNG com os dados, para afinar com imagens reais
 $('bDiag').onclick = () => {
