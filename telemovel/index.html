@@ -114,7 +114,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-17';
+const APP_VER = 'tel-18';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -436,16 +436,30 @@ function processFrame(t, R, CY){
         let lo = tp.x - 0.6*c.wr - tp.ex*0.25, hi = tp.x + 0.6*c.wr + tp.ex*0.25;
         if (k > 0) lo = Math.max(lo, (tl[k-1].x + tp.x)/2); if (k < tl.length - 1) hi = Math.min(hi, (tl[k+1].x + tp.x)/2);
         const a = Math.max(0, Math.round(lo)), b = Math.min(RZW - 1, Math.round(hi)); if (b < a) return;
-        let g = 999, landed = false;
-        for (let x = a; x <= b; x++){ if (gap[x] < g) g = gap[x]; if (LF && LF[x] < 900) landed = true; }
-        { let pm = 0; for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.3) continue; let m = 999; for (let x = a; x <= b; x++) m = Math.min(m, fr.gap[x]); pm = Math.max(pm, Math.min(m, 60)); }
-          drops.push({ hi:tp.hi, id:tp.id, d:Math.max(0, pm - Math.min(g, 60)) }); }
+        // Sinal do dedo = distância à mesa na faixa dele (média das 3 colunas mais baixas: menos ruído do que uma coluna só)
+        const wmin = G => { let m1 = 999, m2 = 999, m3 = 999; for (let x = a; x <= b; x++){ const v = G[x]; if (v < m1){ m3 = m2; m2 = m1; m1 = v; } else if (v < m2){ m3 = m2; m2 = v; } else if (v < m3) m3 = v; }
+          return Math.min(60, b - a >= 2 ? (m1 + m2 + m3)/3 : m1); };
+        const g = wmin(gap), HH = rz.hist, gP = HH.length >= 2 ? wmin(HH[HH.length - 2].gap) : g, gP2 = HH.length >= 3 ? wmin(HH[HH.length - 3].gap) : gP;
+        // ATERRAR (como a app de piano no ar): desceu depressa ≥ limiar e TRAVOU (ou já sobe) perto da mesa → toque,
+        // mesmo que pare uns mm acima da linha (dedo mais atrás, linha um pouco desviada). Antes exigia 2 imagens paradas
+        // numa só coluna, o que falhava "às vezes sim, às vezes não".
+        const memL = rz.mem.get(tp.id) || { lastOn:-9, armed:true, snd:false, t0:0, vel:0.5 }; rz.mem.set(tp.id, memL);
+        const landMaxT = Math.max(2.2*tauOn, 6*pxmm, (S.landPb ?? 1.1)*(c.pb || 0)), relT = 2.5*pxmm;
+        if (memL.landG != null && (g > memL.landG + relT || g > landMaxT + relT)) memL.landG = null;
+        if (memL.landG == null && g <= landMaxT){
+          let pm = g; for (const fr of HH){ if (fr.t < t && t - fr.t <= 0.3) pm = Math.max(pm, wmin(fr.gap)); }
+          if (pm - g >= thr && (gP - g) <= Math.max(1, 0.5*(gP2 - gP))) memL.landG = g;
+        }
+        const landed = memL.landG != null;
+        { let pm = 0; for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.3) continue; pm = Math.max(pm, wmin(fr.gap)); }
+          drops.push({ hi:tp.hi, id:tp.id, d:Math.max(0, pm - g) }); }
         // posição do contacto = MEIO da zona encostada (o ponto mais baixo salta de coluna em coluna com o ruído)
         let sx = 0, n = 0; for (let x = a; x <= b; x++) if (gap[x] <= g + 1.5){ sx += x; n++; }
         const gx = n ? sx/n : tp.x;
-        const mem = rz.mem.get(tp.id) || { lastOn:-9, armed:true, snd:false, t0:0, vel:0.5 };
+        const mem = memL;
         const pv = rz.prev.find(q => q.id === tp.id && Math.abs(q.x - gx) < 1.2*c.wr);
         const on = g <= (pv ? tauOff : tauOn) || landed;
+        if (window.__dbg) window.__dbg.push([+t.toFixed(3), tp.id, Math.round(tp.x), +g.toFixed(1), on ? 1 : 0, landed ? 1 : 0, pv ? 1 : 0, mem.armed ? 1 : 0]);
         if (!on){ if (g > thr) mem.armed = true; rz.mem.set(tp.id, mem); return; }
         const tc = { x:gx, w:b - a + 1, pen:-g, id:tp.id, f:tp.f, tp, tipT:t, land:landed };
         if (pv){ tc.xs = follow(pv.xs, gx, 0.35*c.wr); tc.pens = follow(pv.pens, -g, 4); tc.snd = pv.snd; tc.vel = pv.vel; tc.t0 = pv.t0; }
@@ -454,9 +468,11 @@ function processFrame(t, R, CY){
           tc.xs = gx; tc.pens = -g; tc.snd = mem.snd; tc.vel = mem.vel; tc.t0 = mem.t0;
         } else {
           let best = 0, tb = t;
-          for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.3) continue; let m = 999; for (let x = a; x <= b; x++) m = Math.min(m, fr.gap[x]); m = Math.min(m, 60); if (m > best){ best = m; tb = fr.t; } }
+          for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.3) continue; const m = wmin(fr.gap); if (m > best){ best = m; tb = fr.t; } }
+          best = Math.max(0, best - g);
           tc.xs = gx; tc.pens = -g; tc.t0 = t; tc.best = best;
           tc.snd = !S.strike || best >= thr; tc.vel = velOf((best/pxmm)/Math.max(t - tb, 1/60));
+          if (window.__dbg) window.__dbg.push(['on', +t.toFixed(3), tp.id, Math.round(gx), +best.toFixed(1), +thr.toFixed(1), tc.snd ? 1 : 0]);
           if (tc.snd) fresh.push(tc);
         }
         mem.lastOn = t; mem.armed = false; mem.snd = tc.snd; mem.t0 = tc.t0; mem.vel = tc.vel; rz.mem.set(tp.id, mem);
