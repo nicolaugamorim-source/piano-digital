@@ -90,6 +90,8 @@ body{background:#000}
   <div class="row" id="blk"><button class="btn" data-v="depth">Dedo à frente</button><button class="btn" data-v="lateral">Entre as brancas</button><button class="btn" data-v="off">Desligadas</button></div>
   <label>Como ver os dedos</label>
   <div class="row" id="detM"><button class="btn" data-v="skin">Pela cor da pele</button><button class="btn" data-v="auto">Pela mesa (experimental)</button></div>
+  <label>Modelo das mãos</label>
+  <div class="row" id="hmod"><button class="btn" data-v="lite">Leve (mais rápido)</button><button class="btn" data-v="full">Completo (mais preciso)</button></div>
   <label>Teclas pretas: avançar pelo menos <b id="bfV"></b> (dedo mais perto do telemóvel)</label>
   <input type="range" id="bf" min="6" max="35" step="1">
   <label>Nomes nas teclas</label>
@@ -114,7 +116,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-20';
+const APP_VER = 'tel-21';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -214,7 +216,7 @@ function rzAnalyze(gap, W, wr, tauOn, tauOff, prev){
 
 // ---------- definições ----------
 const KEY = 'pianoDigital.tel.v1';
-const DEF = { detV3:1, strikeMm:4, tipDy:1.6, strike:true, gate:true, detMode:'skin', blackFwd:10, detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
+const DEF = { handModel:'lite', detV3:1, strikeMm:4, tipDy:1.6, strike:true, gate:true, detMode:'skin', blackFwd:10, detV:1, handsV:2, camV:2, skel:true, offL:0, offR:0, speed:0.8, autoOct:true, cam:'hd', camId:'', tauMm:2.5, keyScale:1.4, blackMode:'depth', blackHalf:5.5, labels:'solfege', center:0, hands:true, debug:false, volume:-4, lineOff:0 };
 let store = {}; try { store = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){}
 const S = Object.assign({}, DEF, store.S || {});
 const save = () => { try { store.S = S; localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} };
@@ -428,7 +430,7 @@ function processFrame(t, R, CY){
       }
       const LF = rz.landF, tl = [];
       HT.hands.forEach((pts, hi0) => { for (let f = 0; f < 5; f++){ const q = pts[[4,8,12,16,20][f]], dy = ly(q[0]) - q[1];
-        if (dy < (S.tipDy || 1.6)*c.wr && dy > -1.5*c.wr) tl.push({ x:q[0], y:q[1], f, hi:hi0, id:HT.ids[hi0]*5 + f, ex:f === 0 ? Math.abs(pts[3][0] - q[0]) : 0 }); } });
+        if (dy < (S.tipDyHi ?? 1.6)*c.wr && dy > -1.5*c.wr) tl.push({ x:q[0], y:q[1], f, hi:hi0, id:HT.ids[hi0]*5 + f, ex:f === 0 ? Math.abs(pts[3][0] - q[0]) : 0, high:dy >= (S.tipDy || 1.6)*c.wr }); } });
       tl.sort((a, b) => a.x - b.x);
       if (!rz.mem) rz.mem = new Map();
       const out = [], fresh = [], drops = [];
@@ -471,7 +473,8 @@ function processFrame(t, R, CY){
           for (const fr of rz.hist){ if (fr.t >= t || t - fr.t > 0.3) continue; const m = wmin(fr.gap); if (m > best){ best = m; tb = fr.t; } }
           best = Math.max(0, best - g);
           tc.xs = gx; tc.pens = -g; tc.t0 = t; tc.best = best;
-          tc.snd = !S.strike || best >= thr; tc.vel = velOf((best/pxmm)/Math.max(t - tb, 1/60));
+          // ponta que o reconhecimento viu ALTA (o reconhecimento pode estar atrasado): só conta uma batida clara
+          tc.snd = !S.strike || best >= (tp.high ? (S.highK ?? 1.5) : 1)*thr; tc.vel = velOf((best/pxmm)/Math.max(t - tb, 1/60));
           if (window.__dbg) window.__dbg.push(['on', +t.toFixed(3), tp.id, Math.round(gx), +best.toFixed(1), +thr.toFixed(1), tc.snd ? 1 : 0]);
           if (tc.snd) fresh.push(tc);
         }
@@ -1247,12 +1250,12 @@ $('bFlip').onclick = () => { if (cal()){ cal().flip = !cal().flip; save(); relea
 $('line').oninput = e => { S.lineOff = +e.target.value; $('lineV').textContent = S.lineOff; releaseAll(); save(); layout(); };
 $('bSet').onclick = () => { const p = $('pop'); p.style.display = p.style.display === 'block' ? 'none' : 'block'; $('songs').style.display = 'none'; renderPop(); renderCams(); };
 function seg(id, key, conv){ for (const b of $(id).querySelectorAll('button')){ b.onclick = () => { S[key] = conv(b.dataset.v); save(); renderPop(); releaseAll(); if (key === 'hands'){ S.hands ? handsStart() : handsStop(); } }; } }
-seg('blk', 'blackMode', v => v); seg('detM', 'detMode', v => v); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1');
+seg('blk', 'blackMode', v => v); seg('detM', 'detMode', v => v); seg('hmod', 'handModel', v => { handsStop(); if (S.hands) setTimeout(handsStart, 50); return v; }); seg('lab', 'labels', v => v); seg('hnd', 'hands', v => v === '1');
 function renderPop(){
   $('bf').value = S.blackFwd; $('bfV').textContent = S.blackFwd + ' mm';
   $('tau').value = S.tauMm; $('tauV').textContent = S.tauMm + ' mm'; $('ks').value = S.keyScale; $('ksV').textContent = S.keyScale.toFixed(2) + '×';
   $('vol').value = S.volume; $('volV').textContent = S.volume + ' dB';
-  for (const [id, key, f] of [['detM','detMode',v => v], ['camSz','cam',v => v], ['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
+  for (const [id, key, f] of [['hmod','handModel',v => v], ['detM','detMode',v => v], ['camSz','cam',v => v], ['blk','blackMode',v => v], ['lab','labels',v => v], ['hnd','hands',v => v === '1']]) for (const b of $(id).querySelectorAll('button')) b.classList.toggle('on', f(b.dataset.v) === S[key]);
   $('bDbg').classList.toggle('on', S.debug);
 }
 for (const b of $('camSz').querySelectorAll('button')) b.onclick = async () => { S.cam = b.dataset.v; save(); renderPop(); await switchCam(); };
