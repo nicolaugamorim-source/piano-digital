@@ -114,7 +114,7 @@ body{background:#000}
 </div>
 <script>
 'use strict';
-const APP_VER = 'tel-19';
+const APP_VER = 'tel-20';
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mean = a => a.reduce((p, q) => p + q, 0)/a.length;
@@ -682,13 +682,14 @@ function noteOff(midi){
 
 // ---------- mãos em segundo plano (MediaPipe num worker: nunca atrasa a câmara) ----------
 const hands = { w:null, busy:false, ready:false, res:null, ms:0, err:'', lastSend:0, main:null, mainMs:0, where:'fundo', nRes:0, tried:false, nOk:0 };
-const MP_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14', MP_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const MP_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14', MP_MODEL_FULL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const MP_MODEL = () => S.handModel === 'full' ? MP_MODEL_FULL : new URL('hl_lite.task', location.href).href;
 // No fio principal com a placa gráfica (WebGL) costuma ser muito mais rápido do que no worker (onde muitos Android caem para o processador).
 async function handsMainTry(){
   if (hands.tried) return; hands.tried = true;
   try {
     const mod = await import(MP_BASE + '/vision_bundle.mjs'), fs = await mod.FilesetResolver.forVisionTasks(MP_BASE + '/wasm');
-    const lm = await mod.HandLandmarker.createFromOptions(fs, { baseOptions:{ modelAssetPath:MP_MODEL, delegate:'GPU' }, runningMode:'VIDEO', numHands:2,
+    const lm = await mod.HandLandmarker.createFromOptions(fs, { baseOptions:{ modelAssetPath:MP_MODEL(), delegate:'GPU' }, runningMode:'VIDEO', numHands:2,
       minHandDetectionConfidence:0.35, minHandPresenceConfidence:0.35, minTrackingConfidence:0.35 });
     // mede 6 vezes; fica com o fio principal só se for claramente mais rápido
     let tot = 0, last = 0; for (let k = 0; k < 6; k++){ await new Promise(r => setTimeout(r, 60)); const a = performance.now(); lm.detectForVideo(vid, Math.max(++last, Math.round(performance.now()))); tot += performance.now() - a; }
@@ -699,7 +700,7 @@ async function handsMainTry(){
 }
 let mpTs = 0;
 function handsMainRun(t){
-  if (!hands.main || !S.hands || t - hands.lastSend < Math.max(0.07, 1.5*hands.mainMs/1000)) return;
+  if (!hands.main || !S.hands || t - hands.lastSend < Math.max(0.06, 1.2*hands.mainMs/1000)) return;
   hands.lastSend = t; const a = performance.now();
   try { const ts = Math.max(mpTs + 1, Math.round(a)); mpTs = ts; const r = hands.main.detectForVideo(vid, ts);
     hands.nOk++; hands.res = { t, hands:(r.landmarks || []).map(l => l.map(p => [p.x*RZW, p.y*rz.H])) }; } catch(e){}
@@ -707,7 +708,7 @@ function handsMainRun(t){
 }
 function handsStart(){
   if (hands.w || !S.hands || typeof Worker === 'undefined' || typeof createImageBitmap === 'undefined') return;
-  try { hands.w = new Worker('maos.js'); } catch(e){ hands.err = 'sem worker'; return; }
+  try { hands.w = new Worker(S.handModel === 'full' ? 'maos.js' : 'maos.js?m=lite'); } catch(e){ hands.err = 'sem worker'; return; }
   hands.w.onmessage = e => {
     const d = e.data;
     if (d.type === 'ready'){ hands.ready = true; hands.err = ''; hands.dev = d.delegate; }
@@ -725,7 +726,7 @@ function handsStart(){
 function handsStop(){ if (hands.w){ hands.w.terminate(); hands.w = null; } if (hands.main){ try { hands.main.close(); } catch(e){} hands.main = null; } hands.ready = false; hands.busy = false; hands.res = null; hands.tried = false; hands.nRes = 0; hands.nOk = 0; hands.where = 'fundo'; }
 function handsFeed(t){
   if (hands.main){ handsMainRun(t); return; }
-  if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < Math.max(0.2, 1.6*hands.ms/1000)) return;
+  if (!hands.w || !hands.ready || hands.busy || !S.hands || t - hands.lastSend < Math.max(0.1, 1.1*hands.ms/1000)) return;
   hands.busy = true; hands.lastSend = t;
   createImageBitmap(vid, { resizeWidth:640, resizeHeight:Math.round(640*vid.videoHeight/vid.videoWidth), resizeQuality:'low' }).then(bmp => { if (!hands.w){ bmp.close(); return; } hands.w.postMessage({ bmp, ts:Math.round(t*1000), t }, [bmp]); })
     .catch(() => { hands.busy = false; });

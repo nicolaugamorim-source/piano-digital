@@ -3,7 +3,9 @@
 'use strict';
 const VER = '0.10.14';
 const BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@' + VER;
-const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+// modelo "lite" (o mesmo deteção da mão + pontos com a rede leve da Google): ~1,5× mais rápido, pontas a ~4 px do completo
+const MODEL = self.location.search.includes('m=lite') ? new URL('hl_lite.task', self.location.href).href
+  : 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 let lm = null, failed = false, dev = '', FS = null, MP = null;
 // Em alguns telemóveis a placa gráfica é mais lenta do que o processador dentro de um worker: mede os dois e fica com o mais rápido.
 let nGpu = 0, msGpu = 0, nCpu = 0, msCpu = 0, cpuLm = null, phase = 'gpu';
